@@ -27,7 +27,7 @@ Generated folders such as `Binaries`, `Build`, `Intermediate`, `Saved`, `Derived
 
 ## Basic Usage
 
-1. Open `HUICRPluginProject.uproject` with a compatible Unreal Engine version.
+1. Open `HUICRPluginProject.uproject` with a compatible Unreal Engine version (UE5.6.1-v85 In the Oculus-VR fork of Unreal Engine on GitHub⁠：https://github.com/Oculus-VR/UnrealEngine/tree/oculus-5.6).
 2. Enable required engine plugins for your workflow, especially nDisplay/Switchboard on PC and Meta/Oculus plugins on HMD.
 3. In the HMD map, place the HMD sync manager and configure the HMD screen/calibrator workflow.
 4. In the PC map, place the PC sync manager and bind the nDisplay screen components.
