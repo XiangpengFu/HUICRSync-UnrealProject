@@ -1,0 +1,49 @@
+# Visual Studio / Rider / IDE
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.opensdf
+*.sdf
+*.ipch
+
+# Unreal generated files
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# Generated project files
+*.sln
+*.xcodeproj/
+*.xcworkspace/
+
+# Plugin generated files
+Plugins/**/Binaries/
+Plugins/**/Intermediate/
+Plugins/**/Saved/
+
+# Local Codex / agent workspace metadata
+.agents/
+.codex/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs and crash dumps
+*.log
+*.dmp
+*.tmp
+
+# Packaged builds
+Windows/
+WindowsNoEditor/
+Android/
+Linux/
+Mac/
