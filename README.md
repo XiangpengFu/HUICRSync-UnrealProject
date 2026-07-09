@@ -45,13 +45,6 @@ The project can use separate build targets for PC and HMD packaging:
 
 This separation is important because Meta/Oculus runtime plugins can conflict with headless or nDisplay PC launches if they are packaged into the PC target.
 
-## Git LFS
-
-This repository tracks Unreal binary assets such as `.uasset` and `.umap` with Git LFS. Install Git LFS before cloning or contributing:
-
-```powershell
-git lfs install
-```
 
 ## License
 
