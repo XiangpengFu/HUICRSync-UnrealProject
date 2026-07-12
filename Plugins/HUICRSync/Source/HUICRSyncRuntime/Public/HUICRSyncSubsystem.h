@@ -234,6 +234,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Actor")
 	int32 AllocateActorID(EHUICRSyncActorType TypeCode);
 
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Actor")
+	void ReserveActorID(EHUICRSyncActorType TypeCode, int32 ActorID);
+
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync")
 	void StopSync();
 

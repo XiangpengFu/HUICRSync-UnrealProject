@@ -840,6 +840,17 @@ int32 UHUICRSyncSubsystem::AllocateActorID(EHUICRSyncActorType TypeCode)
 	return ActorIdCounters.FindOrAdd(TypeCode)++;
 }
 
+void UHUICRSyncSubsystem::ReserveActorID(EHUICRSyncActorType TypeCode, int32 ActorID)
+{
+	if (ActorID < 0)
+	{
+		return;
+	}
+
+	int32& Counter = ActorIdCounters.FindOrAdd(TypeCode);
+	Counter = FMath::Max(Counter, ActorID + 1);
+}
+
 void UHUICRSyncSubsystem::StopSync()
 {
 	DestroySockets();

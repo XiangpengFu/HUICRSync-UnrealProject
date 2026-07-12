@@ -50,6 +50,9 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Screen")
 	FTransform InitialTransform;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Screen")
+	FString PersistentScreenKey;
+
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Screen")
 	void ChangeScreenID(int32 NewScreenID);
 
@@ -61,6 +64,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Screen")
 	void ChangeIfControlRemoteScreen(bool bChecked);
+
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Screen")
+	FString ResolvePersistentScreenKey();
 
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Screen")
 	void InitScreen(UHUICRSyncCalibrationSaveGame* SaveGame);
@@ -81,6 +87,9 @@ public:
 	void DestroyDissolveBoxActor();
 
 protected:
+	UPROPERTY(Transient)
+	bool bHasInitializedScreen = false;
+
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 

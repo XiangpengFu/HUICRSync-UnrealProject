@@ -92,6 +92,9 @@ struct HUICRSYNCRUNTIME_API FHUICRSyncScreenPayload
 	FTransform Transform;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync")
+	FTransform InitialTransform;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync")
 	bool bRemoteControlsLocalScreen = false;
 
 	friend FArchive& operator<<(FArchive& Ar, FHUICRSyncScreenPayload& Data)

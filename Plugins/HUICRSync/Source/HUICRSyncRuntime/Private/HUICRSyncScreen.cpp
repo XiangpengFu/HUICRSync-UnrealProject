@@ -5,6 +5,7 @@
 #include "Engine/GameInstance.h"
 #include "HUICRSyncCalibrationSaveGame.h"
 #include "HUICRSyncSubsystem.h"
+#include "UObject/UnrealType.h"
 
 AHUICRSyncScreen::AHUICRSyncScreen()
 {
@@ -47,13 +48,77 @@ void AHUICRSyncScreen::ChangeIfControlRemoteScreen(bool bChecked)
 	bControlRemoteScreen = bChecked;
 }
 
+FString AHUICRSyncScreen::ResolvePersistentScreenKey()
+{
+	PersistentScreenKey.TrimStartAndEndInline();
+	if (PersistentScreenKey.StartsWith(TEXT("AnchorUUID:")))
+	{
+		const FString ExistingUUID = PersistentScreenKey.RightChop(11);
+		if (ExistingUUID.Len() == 32)
+		{
+			return PersistentScreenKey;
+		}
+
+		// Earlier versions used ExportText on FOculusXRUUID, whose bytes are not
+		// reflected UPROPERTY fields. That produced the same "()" key for every anchor.
+		PersistentScreenKey.Reset();
+	}
+	else if (!PersistentScreenKey.IsEmpty())
+	{
+		return PersistentScreenKey;
+	}
+
+	for (AActor* ParentActor = GetAttachParentActor(); ParentActor; ParentActor = ParentActor->GetAttachParentActor())
+	{
+		const FStructProperty* AnchorUUIDProperty = CastField<FStructProperty>(
+			ParentActor->GetClass()->FindPropertyByName(TEXT("AnchorUUID")));
+		if (!AnchorUUIDProperty || !AnchorUUIDProperty->Struct || AnchorUUIDProperty->Struct->GetStructureSize() < 16)
+		{
+			continue;
+		}
+
+		const uint8* UUIDBytes = AnchorUUIDProperty->ContainerPtrToValuePtr<uint8>(ParentActor);
+		if (!UUIDBytes)
+		{
+			continue;
+		}
+
+		FString UUIDString;
+		UUIDString.Reserve(32);
+		bool bHasNonZeroByte = false;
+		for (int32 ByteIndex = 0; ByteIndex < 16; ++ByteIndex)
+		{
+			UUIDString += FString::Printf(TEXT("%02X"), UUIDBytes[ByteIndex]);
+			bHasNonZeroByte |= UUIDBytes[ByteIndex] != 0;
+		}
+
+		if (bHasNonZeroByte)
+		{
+			PersistentScreenKey = FString::Printf(TEXT("AnchorUUID:%s"), *UUIDString);
+			break;
+		}
+	}
+
+	return PersistentScreenKey;
+}
+
 void AHUICRSyncScreen::InitScreen(UHUICRSyncCalibrationSaveGame* SaveGame)
 {
-	InitialTransform = GetActorTransform();
-
-	if (bAutoAssignScreenID && SyncSubsystem)
+	if (!bHasInitializedScreen)
 	{
-		ChangeScreenID(SyncSubsystem->AllocateActorID(EHUICRSyncActorType::HUIScreen));
+		InitialTransform = GetActorTransform();
+		ResolvePersistentScreenKey();
+
+		if (bAutoAssignScreenID && SyncSubsystem)
+		{
+			ChangeScreenID(SyncSubsystem->AllocateActorID(EHUICRSyncActorType::HUIScreen));
+		}
+		else
+		{
+			ChangeScreenID(ScreenID);
+		}
+
+		bHasInitializedScreen = true;
 	}
 	else
 	{
@@ -62,6 +127,10 @@ void AHUICRSyncScreen::InitScreen(UHUICRSyncCalibrationSaveGame* SaveGame)
 
 	if (SaveGame)
 	{
+		// Loading may run more than once while MRUK screens are being registered.
+		// Always rebuild the saved pose from the original spawn transform.
+		SetActorTransform(InitialTransform);
+
 		const FVector SavedScale = SaveGame->ScreenScaleMap.FindRef(ScreenID);
 		SetActorScale3D(SavedScale.IsNearlyZero() ? GetActorScale3D() : SavedScale);
 
@@ -105,15 +174,31 @@ FHUICRSyncScreenPayload AHUICRSyncScreen::BuildScreenPayload() const
 	FHUICRSyncScreenPayload Payload;
 	Payload.ScreenID = ScreenID;
 	Payload.Transform = GetActorTransform();
+	Payload.InitialTransform = InitialTransform;
 	Payload.bRemoteControlsLocalScreen = bControlRemoteScreen;
 	return Payload;
 }
 
 void AHUICRSyncScreen::ApplyScreenPayload(const FHUICRSyncScreenPayload& Payload)
 {
+	const FQuat CurrentRotation = GetActorQuat();
+	FTransform ResolvedTransform = Payload.Transform;
+	if (Payload.ScreenID == 0 && !Payload.bRemoteControlsLocalScreen)
+	{
+		// The HMD main screen defines the active calibration frame. When PC owns
+		// the screen, accept its converted position/size without resetting that frame.
+		ResolvedTransform.SetRotation(CurrentRotation);
+	}
+
 	ChangeScreenID(Payload.ScreenID);
-	SetActorTransform(Payload.Transform);
+	SetActorTransform(ResolvedTransform);
 	bControlRemoteScreen = Payload.bRemoteControlsLocalScreen;
+
+	if (IsValid(SpawnedDissolveBox))
+	{
+		SpawnedDissolveBox->SetActorTransform(GetActorTransform());
+		SpawnedDissolveBox->SetActorScale3D(FVector(1.0f, GetActorScale3D().Y, GetActorScale3D().Z));
+	}
 }
 
 void AHUICRSyncScreen::SpawnDissolveBoxActor()

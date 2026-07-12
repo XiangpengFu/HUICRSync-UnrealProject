@@ -148,6 +148,216 @@ FString AHUICRSyncHMDManagerBase::GetLocalIpAddress() const
 	return SyncSubsystem ? SyncSubsystem->LocalIpAddress : FString();
 }
 
+TArray<int32> AHUICRSyncHMDManagerBase::BuildSavedScreenIDFallbackOrder() const
+{
+	TArray<int32> Result;
+	if (!CalibrationSaveGame)
+	{
+		return Result;
+	}
+
+	TSet<int32> AddedIDs;
+	auto AddID = [&Result, &AddedIDs](int32 ScreenID)
+	{
+		if (ScreenID >= 0 && !AddedIDs.Contains(ScreenID))
+		{
+			AddedIDs.Add(ScreenID);
+			Result.Add(ScreenID);
+		}
+	};
+
+	for (int32 ScreenID : CalibrationSaveGame->SavedScreenIDOrder)
+	{
+		AddID(ScreenID);
+	}
+
+	TArray<int32> AdditionalIDs;
+	auto CollectMapKeys = [&AdditionalIDs](const auto& Map)
+	{
+		for (const auto& Pair : Map)
+		{
+			AdditionalIDs.Add(Pair.Key);
+		}
+	};
+
+	CollectMapKeys(CalibrationSaveGame->ScreenOffsetMap);
+	CollectMapKeys(CalibrationSaveGame->ScreenRotationMap);
+	CollectMapKeys(CalibrationSaveGame->ScreenScaleMap);
+	CollectMapKeys(CalibrationSaveGame->ShouldScreenControlRemoteMap);
+	for (const TPair<FString, int32>& Pair : CalibrationSaveGame->ScreenIDByPersistentKey)
+	{
+		AdditionalIDs.Add(Pair.Value);
+	}
+
+	AdditionalIDs.Sort();
+	for (int32 ScreenID : AdditionalIDs)
+	{
+		AddID(ScreenID);
+	}
+
+	return Result;
+}
+
+void AHUICRSyncHMDManagerBase::RestoreRegisteredScreenIDsAndCalibration()
+{
+	if (!CalibrationSaveGame)
+	{
+		return;
+	}
+
+	RegisteredScreens.RemoveAll([](const AHUICRSyncScreen* Screen)
+	{
+		return !IsValid(Screen);
+	});
+
+	for (AHUICRSyncScreen* Screen : RegisteredScreens)
+	{
+		Screen->InitScreen(nullptr);
+		Screen->ResolvePersistentScreenKey();
+	}
+
+	TSet<int32> UsedIDs;
+	TArray<AHUICRSyncScreen*> ScreensWithoutMatchedKey;
+	for (AHUICRSyncScreen* Screen : RegisteredScreens)
+	{
+		const int32* SavedScreenID = Screen->PersistentScreenKey.IsEmpty()
+			? nullptr
+			: CalibrationSaveGame->ScreenIDByPersistentKey.Find(Screen->PersistentScreenKey);
+
+		if (SavedScreenID && *SavedScreenID >= 0 && !UsedIDs.Contains(*SavedScreenID))
+		{
+			Screen->ChangeScreenID(*SavedScreenID);
+			UsedIDs.Add(*SavedScreenID);
+		}
+		else
+		{
+			ScreensWithoutMatchedKey.Add(Screen);
+		}
+	}
+
+	const TArray<int32> FallbackIDs = BuildSavedScreenIDFallbackOrder();
+	int32 NextNewScreenID = 0;
+	for (int32 SavedScreenID : FallbackIDs)
+	{
+		NextNewScreenID = FMath::Max(NextNewScreenID, SavedScreenID + 1);
+	}
+
+	int32 FallbackIndex = 0;
+	for (AHUICRSyncScreen* Screen : ScreensWithoutMatchedKey)
+	{
+		while (FallbackIndex < FallbackIDs.Num() && UsedIDs.Contains(FallbackIDs[FallbackIndex]))
+		{
+			++FallbackIndex;
+		}
+
+		int32 ResolvedScreenID = INDEX_NONE;
+		if (FallbackIndex < FallbackIDs.Num())
+		{
+			ResolvedScreenID = FallbackIDs[FallbackIndex++];
+		}
+		else
+		{
+			while (UsedIDs.Contains(NextNewScreenID))
+			{
+				++NextNewScreenID;
+			}
+			ResolvedScreenID = NextNewScreenID++;
+		}
+
+		Screen->ChangeScreenID(ResolvedScreenID);
+		UsedIDs.Add(ResolvedScreenID);
+	}
+
+	for (AHUICRSyncScreen* Screen : RegisteredScreens)
+	{
+		if (SyncSubsystem)
+		{
+			SyncSubsystem->ReserveActorID(EHUICRSyncActorType::HUIScreen, Screen->ScreenID);
+		}
+		Screen->InitScreen(CalibrationSaveGame);
+	}
+
+	ManipulatedTargetScreen = nullptr;
+	for (AHUICRSyncScreen* Screen : RegisteredScreens)
+	{
+		if (Screen->ScreenID == 0)
+		{
+			ManipulatedTargetScreen = Screen;
+			break;
+		}
+	}
+	if (!IsValid(ManipulatedTargetScreen) && RegisteredScreens.Num() > 0)
+	{
+		ManipulatedTargetScreen = RegisteredScreens[0];
+	}
+
+	SelectCalibrator();
+}
+
+void AHUICRSyncHMDManagerBase::PrepareRegisteredScreensForSave()
+{
+	if (!CalibrationSaveGame)
+	{
+		return;
+	}
+
+	RegisteredScreens.RemoveAll([](const AHUICRSyncScreen* Screen)
+	{
+		return !IsValid(Screen);
+	});
+
+	const TArray<int32> PreviousSavedOrder = BuildSavedScreenIDFallbackOrder();
+	int32 NextNewScreenID = 0;
+	for (int32 SavedScreenID : PreviousSavedOrder)
+	{
+		NextNewScreenID = FMath::Max(NextNewScreenID, SavedScreenID + 1);
+	}
+	for (const AHUICRSyncScreen* Screen : RegisteredScreens)
+	{
+		NextNewScreenID = FMath::Max(NextNewScreenID, Screen->ScreenID + 1);
+	}
+
+	TSet<int32> UsedIDs;
+	TArray<int32> CurrentScreenOrder;
+	for (AHUICRSyncScreen* Screen : RegisteredScreens)
+	{
+		if (Screen->ScreenID < 0 || UsedIDs.Contains(Screen->ScreenID))
+		{
+			while (UsedIDs.Contains(NextNewScreenID))
+			{
+				++NextNewScreenID;
+			}
+			Screen->ChangeScreenID(NextNewScreenID++);
+		}
+
+		UsedIDs.Add(Screen->ScreenID);
+		CurrentScreenOrder.Add(Screen->ScreenID);
+		Screen->ResolvePersistentScreenKey();
+		if (SyncSubsystem)
+		{
+			SyncSubsystem->ReserveActorID(EHUICRSyncActorType::HUIScreen, Screen->ScreenID);
+		}
+	}
+
+	CalibrationSaveGame->SavedScreenIDOrder = CurrentScreenOrder;
+	for (int32 SavedScreenID : PreviousSavedOrder)
+	{
+		if (!CalibrationSaveGame->SavedScreenIDOrder.Contains(SavedScreenID))
+		{
+			CalibrationSaveGame->SavedScreenIDOrder.Add(SavedScreenID);
+		}
+	}
+
+	CalibrationSaveGame->ScreenIDByPersistentKey.Reset();
+	for (const AHUICRSyncScreen* Screen : RegisteredScreens)
+	{
+		if (!Screen->PersistentScreenKey.IsEmpty())
+		{
+			CalibrationSaveGame->ScreenIDByPersistentKey.Add(Screen->PersistentScreenKey, Screen->ScreenID);
+		}
+	}
+}
+
 bool AHUICRSyncHMDManagerBase::LoadCalibrationData()
 {
 	USaveGame* LoadedSave = UGameplayStatics::LoadGameFromSlot(CalibrationSaveSlotName, CalibrationSaveUserIndex);
@@ -175,13 +385,7 @@ bool AHUICRSyncHMDManagerBase::LoadCalibrationData()
 		SyncSubsystem->bMotionParallaxState = bMotionParallaxState;
 	}
 
-	for (AHUICRSyncScreen* Screen : RegisteredScreens)
-	{
-		if (IsValid(Screen))
-		{
-			Screen->InitScreen(CalibrationSaveGame);
-		}
-	}
+	RestoreRegisteredScreenIDsAndCalibration();
 
 	for (AHUICRSyncCalibrator_HMD* Calibrator : RegisteredCalibrators)
 	{
@@ -210,6 +414,7 @@ bool AHUICRSyncHMDManagerBase::SaveCalibrationData()
 	CalibrationSaveGame->TargetPCSyncPort = RemoteSyncPort;
 	CalibrationSaveGame->RetargetPawnScale = RetargetPawnScale;
 	CalibrationSaveGame->bMotionParallaxState = bMotionParallaxState;
+	PrepareRegisteredScreensForSave();
 
 	AHUICRSyncCalibrator_HMD* MainCalibrator = nullptr;
 	for (AHUICRSyncCalibrator_HMD* Calibrator : RegisteredCalibrators)
@@ -254,6 +459,8 @@ bool AHUICRSyncHMDManagerBase::SaveScreenData()
 		return false;
 	}
 
+	PrepareRegisteredScreensForSave();
+
 	for (AHUICRSyncScreen* Screen : RegisteredScreens)
 	{
 		if (IsValid(Screen))
@@ -272,11 +479,13 @@ void AHUICRSyncHMDManagerBase::RegisterScreen(AHUICRSyncScreen* Screen)
 		return;
 	}
 
+	const bool bAlreadyRegistered = RegisteredScreens.Contains(Screen);
 	RegisteredScreens.AddUnique(Screen);
+	Screen->InitScreen(nullptr);
 
-	if (CalibrationSaveGame)
+	if (CalibrationSaveGame && !bAlreadyRegistered)
 	{
-		Screen->InitScreen(CalibrationSaveGame);
+		RestoreRegisteredScreenIDsAndCalibration();
 	}
 
 	if (!IsValid(ManipulatedTargetScreen) || Screen->ScreenID == 0)
@@ -736,6 +945,7 @@ bool AHUICRSyncHMDManagerBase::SendScreenPayload(int32 ScreenID, const FTransfor
 	FHUICRSyncScreenPayload Payload;
 	Payload.ScreenID = ScreenID;
 	Payload.Transform = ScreenTransform;
+	Payload.InitialTransform = ScreenTransform;
 	Payload.bRemoteControlsLocalScreen = bHmdControlsPCScreen;
 	return QueueScreenPayload(Payload);
 }

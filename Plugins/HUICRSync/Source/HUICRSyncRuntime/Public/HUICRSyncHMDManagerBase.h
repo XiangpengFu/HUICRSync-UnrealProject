@@ -173,6 +173,9 @@ protected:
 	virtual void HandleNetDataReceived() override;
 
 	bool ApplyMotionParallaxState(bool bNewState, bool bUpdatePreference, bool bSavePreference);
+	void RestoreRegisteredScreenIDsAndCalibration();
+	void PrepareRegisteredScreensForSave();
+	TArray<int32> BuildSavedScreenIDFallbackOrder() const;
 
 	UFUNCTION()
 	void HandleSyncSceneReady();

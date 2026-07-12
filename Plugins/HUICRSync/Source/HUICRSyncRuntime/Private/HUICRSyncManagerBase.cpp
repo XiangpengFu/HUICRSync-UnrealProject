@@ -5,6 +5,11 @@
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 
+namespace
+{
+const TCHAR* ScreenInitialTransformAddressPrefix = TEXT("HUICRScreenInitialTransform=");
+}
+
 AHUICRSyncManagerBase::AHUICRSyncManagerBase()
 {
 	PrimaryActorTick.bCanEverTick = false;
@@ -68,6 +73,7 @@ bool AHUICRSyncManagerBase::QueueScreenPayload(const FHUICRSyncScreenPayload& Pa
 	FHUICRSyncNetEntry Entry;
 	Entry.TypeCode = EHUICRSyncActorType::HUIScreen;
 	Entry.ActorID = Payload.ScreenID;
+	Entry.Address = FString::Printf(TEXT("%s%s"), ScreenInitialTransformAddressPrefix, *Payload.InitialTransform.ToString());
 	Entry.PayloadBytes = PayloadBytes;
 	SyncSubsystem->QueueNetEntry(Entry);
 	return !Writer.IsError();
@@ -210,6 +216,16 @@ bool AHUICRSyncManagerBase::DecodeScreenEntry(const FHUICRSyncNetEntry& Entry, F
 
 	FMemoryReader Reader(Entry.PayloadBytes, true);
 	Reader << OutPayload;
+	OutPayload.InitialTransform = OutPayload.Transform;
+	const FString Prefix(ScreenInitialTransformAddressPrefix);
+	if (Entry.Address.StartsWith(Prefix))
+	{
+		FTransform ParsedInitialTransform;
+		if (ParsedInitialTransform.InitFromString(Entry.Address.RightChop(Prefix.Len())))
+		{
+			OutPayload.InitialTransform = ParsedInitialTransform;
+		}
+	}
 	return !Reader.IsError();
 }
 

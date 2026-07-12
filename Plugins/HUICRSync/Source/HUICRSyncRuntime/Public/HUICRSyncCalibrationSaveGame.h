@@ -31,6 +31,12 @@ public:
 	TMap<int32, bool> ShouldScreenControlRemoteMap;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Calibration")
+	TMap<FString, int32> ScreenIDByPersistentKey;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Calibration")
+	TArray<int32> SavedScreenIDOrder;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Calibration")
 	FVector HUIScale = FVector::OneVector;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Calibration")

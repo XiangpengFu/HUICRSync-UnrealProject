@@ -77,6 +77,7 @@ bool AHUICRSyncPCManagerBase::RefreshPCCalibratorTransform()
 	const FHUICRSyncPCScreenBinding* MainBinding = FindPCScreenBinding(0);
 	if (MainBinding && IsValid(MainBinding->SpawnedCalibrator))
 	{
+		MainBinding->SpawnedCalibrator->UpdateTransformFromBoundScreen();
 		SetPCCalibratorTransform(MainBinding->SpawnedCalibrator->GetActorTransform());
 		return true;
 	}
@@ -156,6 +157,7 @@ bool AHUICRSyncPCManagerBase::SendLocalScreenPayload(int32 ScreenID, const FTran
 	FHUICRSyncScreenPayload Payload;
 	Payload.ScreenID = ScreenID;
 	Payload.Transform = SyncSubsystem ? SyncSubsystem->ConvertPCTransformToHMD(ScreenTransform) : ScreenTransform;
+	Payload.InitialTransform = Payload.Transform;
 	Payload.bRemoteControlsLocalScreen = bRemoteControlsLocalScreen;
 	return QueueScreenPayload(Payload);
 }
@@ -358,11 +360,41 @@ bool AHUICRSyncPCManagerBase::ApplyHMDScreenPayload(const FHUICRSyncScreenPayloa
 	if (!Payload.bRemoteControlsLocalScreen)
 	{
 		RestorePCScreen(Payload.ScreenID);
-		SendPCScreenPayload(Payload.ScreenID);
+
+		// The main-screen response must use the coordinate conversion rebuilt
+		// from the restored PC main screen. HandleNetDataReceived sends it after
+		// refreshing the PC calibrator and HMD/PC transforms.
+		if (Payload.ScreenID != 0)
+		{
+			SendPCScreenPayload(Payload.ScreenID);
+		}
 		return true;
 	}
 
 	FTransform PCScreenTransform = SyncSubsystem ? SyncSubsystem->ConvertHMDTransformToPC(Payload.Transform) : Payload.Transform;
+	if (Payload.ScreenID == 0)
+	{
+		FTransform MainScreenTransform = Binding->InitialTransform;
+
+		const FQuat HMDRotationDelta =
+			Payload.InitialTransform.GetRotation().Inverse() * Payload.Transform.GetRotation();
+		const FQuat MainScreenRotation =
+			Binding->InitialTransform.GetRotation() * HMDRotationDelta;
+		MainScreenTransform.SetRotation(MainScreenRotation.GetNormalized());
+
+		// Scale must use the same HMD-to-PC conversion as every other screen.
+		// This makes PC -> HMD restore followed by an unchanged HMD -> PC update
+		// a round trip instead of treating the restored MRUK scale as a new edit.
+		FVector MainScreenScale = PCScreenTransform.GetScale3D();
+		MainScreenScale.X = Binding->InitialTransform.GetScale3D().X;
+		MainScreenTransform.SetScale3D(MainScreenScale);
+
+		Binding->ScreenComponent->SetWorldTransform(MainScreenTransform);
+		UpdatePCScreenVisual(Payload.ScreenID);
+		OnPCScreenTransformResolved.Broadcast(Payload.ScreenID, Payload, MainScreenTransform);
+		return true;
+	}
+
 	if (Payload.ScreenID != 0 && PCMainScreen)
 	{
 		FVector PCScale = PCScreenTransform.GetScale3D();
@@ -556,15 +588,52 @@ void AHUICRSyncPCManagerBase::HandleNetDataReceived()
 
 	if (const FHUICRSyncNetInnerMapEntry* ScreenMap = SyncSubsystem->ReceivedDataMap.Find(EHUICRSyncActorType::HUIScreen))
 	{
+		TArray<FHUICRSyncScreenPayload> DecodedScreenPayloads;
+		DecodedScreenPayloads.Reserve(ScreenMap->InnerMap.Num());
+
 		for (const TPair<int32, FHUICRSyncNetEntry>& Pair : ScreenMap->InnerMap)
 		{
 			FHUICRSyncScreenPayload ScreenPayload;
 			if (DecodeScreenEntry(Pair.Value, ScreenPayload))
 			{
 				LastHMDScreenPayloads.Add(ScreenPayload.ScreenID, ScreenPayload);
-				ApplyHMDScreenPayload(ScreenPayload);
-				OnScreenPayloadReceived.Broadcast(ScreenPayload);
+				DecodedScreenPayloads.Add(ScreenPayload);
 			}
+		}
+
+		const FHUICRSyncScreenPayload* MainScreenPayload = DecodedScreenPayloads.FindByPredicate(
+			[](const FHUICRSyncScreenPayload& ScreenPayload)
+			{
+				return ScreenPayload.ScreenID == 0;
+			});
+
+		if (MainScreenPayload)
+		{
+			ApplyHMDScreenPayload(*MainScreenPayload);
+			OnScreenPayloadReceived.Broadcast(*MainScreenPayload);
+
+			// The PC calibrator follows the main screen. Refresh the coordinate
+			// conversion after resolving the main screen and before other screens.
+			if (bCalibrationDataProcessed)
+			{
+				bCalibrationDataProcessed = RecalculateHMDPCTransforms();
+			}
+
+			if (!MainScreenPayload->bRemoteControlsLocalScreen && bCalibrationDataProcessed)
+			{
+				SendPCScreenPayload(MainScreenPayload->ScreenID);
+			}
+		}
+
+		for (const FHUICRSyncScreenPayload& ScreenPayload : DecodedScreenPayloads)
+		{
+			if (ScreenPayload.ScreenID == 0)
+			{
+				continue;
+			}
+
+			ApplyHMDScreenPayload(ScreenPayload);
+			OnScreenPayloadReceived.Broadcast(ScreenPayload);
 		}
 	}
 
