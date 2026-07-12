@@ -10,9 +10,6 @@ This repository is published as a full Unreal project instead of a plugin-only p
 - `Source/` - project target files, including PC/HMD target variants.
 - `Config/` - project settings required by the prepared workflow.
 - `Content/` - project-level Unreal content. Some folders may come from Unreal template content.
-- `HUICRSync_UserGuide_Combined.docx` - detailed user guide and API reference draft.
-
-Generated folders such as `Binaries`, `Build`, `Intermediate`, `Saved`, `DerivedDataCache`, and `.vs` are intentionally ignored.
 
 ## Main Plugin Features
 
