@@ -10,9 +10,6 @@ This repository is published as a full Unreal project instead of a plugin-only p
 - `Source/` - project target files, including PC/HMD target variants.
 - `Config/` - project settings required by the prepared workflow.
 - `Content/` - project-level Unreal content. Some folders may come from Unreal template content.
-- `HUICRSync_UserGuide_Combined.docx` - detailed user guide and API reference draft.
-
-Generated folders such as `Binaries`, `Build`, `Intermediate`, `Saved`, `DerivedDataCache`, and `.vs` are intentionally ignored.
 
 ## Main Plugin Features
 
@@ -27,7 +24,7 @@ Generated folders such as `Binaries`, `Build`, `Intermediate`, `Saved`, `Derived
 
 ## Basic Usage
 
-1. Open `HUICRPluginProject.uproject` with a compatible Unreal Engine version.
+1. Open `HUICRPluginProject.uproject` with a compatible Unreal Engine version (UE5.6.1-v85 In the Oculus-VR fork of Unreal Engine on GitHub⁠：https://github.com/Oculus-VR/UnrealEngine/tree/oculus-5.6).
 2. Enable required engine plugins for your workflow, especially nDisplay/Switchboard on PC and Meta/Oculus plugins on HMD.
 3. In the HMD map, place the HMD sync manager and configure the HMD screen/calibrator workflow.
 4. In the PC map, place the PC sync manager and bind the nDisplay screen components.
@@ -45,13 +42,6 @@ The project can use separate build targets for PC and HMD packaging:
 
 This separation is important because Meta/Oculus runtime plugins can conflict with headless or nDisplay PC launches if they are packaged into the PC target.
 
-## Git LFS
-
-This repository tracks Unreal binary assets such as `.uasset` and `.umap` with Git LFS. Install Git LFS before cloning or contributing:
-
-```powershell
-git lfs install
-```
 
 ## License
 
