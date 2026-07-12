@@ -4,7 +4,7 @@ HUICRSync Unreal Project is a configured Unreal Engine project containing the HU
 
 This repository is published as a full Unreal project instead of a plugin-only package so users can open a prepared project, inspect the PC/HMD target setup, and test the plugin with the included maps and plugin content.
 
-Demo Video: https://youtu.be/dEcZ0Hj-dEo
+Tutorial Video: https://youtu.be/dEcZ0Hj-dEo
 
 ## Repository Layout
 
