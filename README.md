@@ -6,7 +6,14 @@ This repository is published as a full Unreal project instead of a plugin-only p
 
 Tutorial Video: https://youtu.be/dEcZ0Hj-dEo
 
+Full Experience Video (implemented with HUICRSync): https://youtu.be/Jl1Pwlp3yjA
+
+TVCG Paper DOI: `10.1109/TVCG.XXXXXXX` (placeholder; replace after the DOI is assigned)
+
 Documentation: https://drive.google.com/file/d/1XpAqJXuvuR-GHHegTE5Xt7BTbgnMPMu7/view?usp=drive_link
+
+> [!IMPORTANT]
+> The current HMD implementation supports Meta Quest 3 only. Other HMDs and Meta Quest models are not currently supported.
 
 ## Repository Layout
 
@@ -42,7 +49,7 @@ For detailed setup, API names, state definitions, and blueprint workflow notes, 
 The project can use separate build targets for PC and HMD packaging:
 
 - PC target: intended for nDisplay/Switchboard builds.
-- HMD target: intended for Meta/Oculus interaction and Android/Quest workflows.
+- HMD target: intended for Meta Quest 3 using the Meta/Oculus interaction and Android workflow.
 
 This separation is important because Meta/Oculus runtime plugins can conflict with headless or nDisplay PC launches if they are packaged into the PC target.
 
@@ -50,7 +57,7 @@ This separation is important because Meta/Oculus runtime plugins can conflict wi
 
 If you use HUICRSync as a system or as part of a research methodology, please cite the associated TVCG paper:
 
-> Xiangpeng Fu and Mads Haahr. "Exploring Cross-Reality Transitions between Projections and Head-Mounted Displays for Immersive Digital Art." *IEEE Transactions on Visualization and Computer Graphics*, 2026. DOI pending.
+> Xiangpeng Fu and Mads Haahr. "Exploring Cross-Reality Transitions between Projections and Head-Mounted Displays for Immersive Digital Art." *IEEE Transactions on Visualization and Computer Graphics*, 2026. DOI: `10.1109/TVCG.XXXXXXX` (placeholder).
 
 If your publication, artifact, or evaluation needs to identify the exact code version used, please cite both the TVCG paper above and the corresponding archived software release:
 
