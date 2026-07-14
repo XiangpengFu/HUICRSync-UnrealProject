@@ -6,7 +6,7 @@ This repository is published as a full Unreal project instead of a plugin-only p
 
 Tutorial Video: https://youtu.be/dEcZ0Hj-dEo
 
-Documentation: https://drive.google.com/file/d/1cVm5pPxdXcxf4NFeOXp_Y73wFbAegLrr/view?usp=drive_link
+Documentation: https://drive.google.com/file/d/1XpAqJXuvuR-GHHegTE5Xt7BTbgnMPMu7/view?usp=drive_link
 
 ## Repository Layout
 
