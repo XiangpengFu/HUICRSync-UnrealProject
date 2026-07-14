@@ -113,7 +113,7 @@ bool AHUICRSyncHMDManagerBase::ConnectToPC(const FString& PCIpAddress, int32 Tar
 	}
 
 	SyncSubsystem->ConfigureSync(EHUICRSyncRole::HMD, LocalSyncPort, TargetPCSyncPort, PCIpAddress);
-	SyncSubsystem->bConnectionState = false;
+	SyncSubsystem->BeginConnectionAttempt();
 	
 	FHUICRSyncCommandArg IpArg;
 	IpArg.Type = EHUICRSyncCommandArgType::String;
@@ -123,7 +123,12 @@ bool AHUICRSyncHMDManagerBase::ConnectToPC(const FString& PCIpAddress, int32 Tar
 	PortArg.Type = EHUICRSyncCommandArgType::Int32;
 	PortArg.IntValue = LocalSyncPort;
 
-	const bool bConnectionRequestSent = SyncSubsystem->SendReliableCommand(TEXT("FromHMD/HMDConnectionRequest"), { IpArg, PortArg });
+	FHUICRSyncCommandArg SessionArg;
+	SessionArg.Type = EHUICRSyncCommandArgType::String;
+	SessionArg.StringValue = SyncSubsystem->LocalSessionId;
+
+	const bool bConnectionRequestSent = SyncSubsystem->SendReliableCommand(
+		TEXT("FromHMD/HMDConnectionRequest"), { IpArg, PortArg, SessionArg });
 
 	if (bSaveConnection)
 	{

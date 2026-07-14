@@ -17,6 +17,7 @@ struct FHUICRSyncPeerRuntimeState
 	TSharedPtr<FInternetAddr> UDPAddr;
 	TMap<uint32, FHUICRSyncPendingCommand> PendingReliableCommands;
 	TSet<uint32> ReceivedCommandIds;
+	FString RemoteSessionId;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHUICRSyncConnectionStateChanged, bool, bConnected);
@@ -74,6 +75,9 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Network")
 	FString RemoteIpAddress;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Network")
+	FString LocalSessionId;
 
 	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Network")
 	FString DefaultPeerId;
@@ -227,6 +231,8 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Network")
 	bool SetDefaultPeer(const FString& PeerId);
+
+	void BeginConnectionAttempt();
 
 	UFUNCTION(BlueprintPure, Category = "HUICR Sync|Network")
 	TArray<FString> GetKnownPeerIds() const;

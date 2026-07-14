@@ -20,6 +20,14 @@ namespace HUICRSyncProtocol
 	static constexpr uint32 PCCommandIdPrefix = 0x10000000;
 	static constexpr uint32 HMDCommandIdPrefix = 0x20000000;
 	static constexpr uint32 UnknownCommandIdPrefix = 0x30000000;
+
+	static bool IsConnectionHandshakeAddress(const FString& Address)
+	{
+		return Address.Equals(TEXT("FromHMD/HMDConnectionRequest"), ESearchCase::IgnoreCase) ||
+			Address.Equals(TEXT("/FromHMD/HMDConnectionRequest"), ESearchCase::IgnoreCase) ||
+			Address.Equals(TEXT("FromPC/PCConnectionRequest"), ESearchCase::IgnoreCase) ||
+			Address.Equals(TEXT("/FromPC/PCConnectionRequest"), ESearchCase::IgnoreCase);
+	}
 }
 
 UHUICRSyncSubsystem::UHUICRSyncSubsystem()
@@ -31,6 +39,7 @@ UHUICRSyncSubsystem::UHUICRSyncSubsystem()
 void UHUICRSyncSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	LocalSessionId = FGuid::NewGuid().ToString();
 	LocalIpAddress = ResolveLocalIpAddress();
 }
 
@@ -65,6 +74,11 @@ bool UHUICRSyncSubsystem::IsTickable() const
 
 bool UHUICRSyncSubsystem::ConfigureSync(EHUICRSyncRole InRole, int32 InLocalSyncPort, int32 InRemoteSyncPort, const FString& InRemoteIpAddress)
 {
+	if (LocalSessionId.IsEmpty())
+	{
+		LocalSessionId = FGuid::NewGuid().ToString();
+	}
+
 	Role = InRole;
 	LocalSyncPort = InLocalSyncPort;
 	RemoteSyncPort = InRemoteSyncPort;
@@ -216,6 +230,26 @@ void UHUICRSyncSubsystem::ReceiveData()
 			if (!Peer)
 			{
 				continue;
+			}
+
+			if (HUICRSyncProtocol::IsConnectionHandshakeAddress(CommandPayload.Address) &&
+				CommandPayload.Args.Num() >= 3 &&
+				CommandPayload.Args[2].Type == EHUICRSyncCommandArgType::String)
+			{
+				const FString& IncomingSessionId = CommandPayload.Args[2].StringValue;
+				if (!IncomingSessionId.IsEmpty() && Peer->RemoteSessionId != IncomingSessionId)
+				{
+					const bool bHadPreviousSession = !Peer->RemoteSessionId.IsEmpty();
+					Peer->PendingReliableCommands.Empty();
+					Peer->ReceivedCommandIds.Empty();
+					Peer->RemoteSessionId = IncomingSessionId;
+
+					if (bHadPreviousSession)
+					{
+						UE_LOG(LogTemp, Log, TEXT("HUICRSync detected a restarted peer. Peer=%s Session=%s"),
+							*Peer->Info.PeerId, *IncomingSessionId);
+					}
+				}
 			}
 
 			Peer->Info.LastReceiveTime = FPlatformTime::Seconds();
@@ -828,6 +862,24 @@ bool UHUICRSyncSubsystem::SetDefaultPeer(const FString& PeerId)
 	return true;
 }
 
+void UHUICRSyncSubsystem::BeginConnectionAttempt()
+{
+	const bool bWasConnected = bConnectionState;
+	bConnectionState = false;
+
+	if (FHUICRSyncPeerRuntimeState* Peer = FindDefaultPeer())
+	{
+		Peer->Info.bConnected = false;
+		Peer->PendingReliableCommands.Empty();
+	}
+
+	RefreshPeerInfoSnapshot();
+	if (bWasConnected)
+	{
+		OnConnectionStateChanged.Broadcast(false);
+	}
+}
+
 TArray<FString> UHUICRSyncSubsystem::GetKnownPeerIds() const
 {
 	TArray<FString> PeerIds;
@@ -1435,7 +1487,11 @@ void UHUICRSyncSubsystem::HandleCommandPayload(FHUICRSyncPeerRuntimeState& Peer,
 		PortArg.Type = EHUICRSyncCommandArgType::Int32;
 		PortArg.IntValue = LocalSyncPort;
 
-		SendReliableCommand(TEXT("FromPC/PCConnectionRequest"), { IpArg, PortArg });
+		FHUICRSyncCommandArg SessionArg;
+		SessionArg.Type = EHUICRSyncCommandArgType::String;
+		SessionArg.StringValue = LocalSessionId;
+
+		SendReliableCommand(TEXT("FromPC/PCConnectionRequest"), { IpArg, PortArg, SessionArg });
 		return;
 	}
 
