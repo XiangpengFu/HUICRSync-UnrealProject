@@ -46,6 +46,18 @@ The project can use separate build targets for PC and HMD packaging:
 
 This separation is important because Meta/Oculus runtime plugins can conflict with headless or nDisplay PC launches if they are packaged into the PC target.
 
+## Citation
+
+If you use HUICRSync as a system or as part of a research methodology, please cite the associated TVCG paper:
+
+> Xiangpeng Fu and Mads Haahr. "Exploring Cross-Reality Transitions between Projections and Head-Mounted Displays for Immersive Digital Art." *IEEE Transactions on Visualization and Computer Graphics*, 2026. DOI pending.
+
+If your publication, artifact, or evaluation needs to identify the exact code version used, please cite both the TVCG paper above and the corresponding archived software release:
+
+> Xiangpeng Fu. *HUICRSync v0.1.0*. Zenodo, 2026. https://doi.org/10.5281/zenodo.21358937
+
+Machine-readable citation metadata is provided in [`CITATION.cff`](CITATION.cff). The TVCG DOI placeholder in that file will be replaced after the article DOI is assigned.
+
 
 ## License
 

@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite both the software and the preferred article."
+title: "HUICRSync"
+type: software
+version: "0.1.0"
+date-released: "2026-07-14"
+doi: "10.5281/zenodo.21358937"
+authors:
+  - family-names: "Fu"
+    given-names: "Xiangpeng"
+abstract: "A reusable Unreal Engine runtime synchronization plugin for PC and HMD cross-reality applications using UDP state packets, reliable commands, calibration, nDisplay screen binding, and synchronized actor spawning."
+keywords:
+  - "Unreal Engine"
+  - "cross-reality"
+  - "mixed reality"
+  - "nDisplay"
+  - "PC-HMD synchronization"
+license: MIT
+repository-code: "https://github.com/XiangpengFu/HUICRSync-UnrealProject"
+
+preferred-citation:
+  type: article
+  title: "Exploring Cross-Reality Transitions between Projections and Head-Mounted Displays for Immersive Digital Art"
+  authors:
+    - family-names: "Fu"
+      given-names: "Xiangpeng"
+    - family-names: "Haahr"
+      given-names: "Mads"
+  journal: "IEEE Transactions on Visualization and Computer Graphics"
+  year: 2026
+  doi: "10.1109/TVCG.XXXXXXX" # TODO: Replace with the assigned TVCG DOI.
+  notes: "The TVCG DOI is pending and must replace the placeholder before final publication."
