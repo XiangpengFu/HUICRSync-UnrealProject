@@ -79,6 +79,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Screen")
 	bool bScreenDissolveBoxHidden = true;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Screen",
+		meta = (DisplayName = "Auto Spawn PC Screen Dissolve Boxes"))
+	bool bAutoSpawnPCScreenDissolveBoxes = true;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|nDisplay")
 	TSubclassOf<AHUICRSyncPCScreenVisual> PCScreenVisualClass;
 

@@ -264,7 +264,7 @@ bool AHUICRSyncPCManagerBase::RegisterPCScreenComponent(int32 ScreenID, USceneCo
 		{
 			ExistingBinding->SpawnedVisualActor->BindScreenComponent(ScreenID, ScreenComponent);
 		}
-		else
+		else if (bAutoSpawnPCScreenDissolveBoxes)
 		{
 			SpawnPCScreenVisual(ScreenID);
 		}
@@ -282,7 +282,10 @@ bool AHUICRSyncPCManagerBase::RegisterPCScreenComponent(int32 ScreenID, USceneCo
 	NewBinding.InitialTransform = ScreenComponent->GetComponentTransform();
 	NewBinding.bApplyTransformAutomatically = bApplyTransformAutomatically;
 	PCScreenBindings.Add(NewBinding);
-	SpawnPCScreenVisual(ScreenID);
+	if (bAutoSpawnPCScreenDissolveBoxes)
+	{
+		SpawnPCScreenVisual(ScreenID);
+	}
 	if (bAutoSpawnPCCalibrators)
 	{
 		SpawnPCCalibrator(ScreenID);
