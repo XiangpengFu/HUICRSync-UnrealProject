@@ -42,8 +42,6 @@ TVCG Paper DOI: `10.1109/TVCG.XXXXXXX` (placeholder; replace after the DOI is as
 5. Configure PC IP and sync port from the HMD widget or manager.
 6. Run connection, calibration, initial sync spawn, and game start in that order.
 
-For detailed setup, API names, state definitions, and blueprint workflow notes, see `HUICRSync_UserGuide_Combined.docx`.
-
 ## PC and HMD Targets
 
 The project can use separate build targets for PC and HMD packaging:
