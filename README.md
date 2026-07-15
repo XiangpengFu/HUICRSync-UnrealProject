@@ -59,7 +59,7 @@ If you use HUICRSync as a system or as part of a research methodology, please ci
 
 If your publication, artifact, or evaluation needs to identify the exact code version used, please cite both the TVCG paper above and the corresponding archived software release:
 
-> Xiangpeng Fu. *HUICRSync v0.1.1*. Zenodo, 2026. https://doi.org/10.5281/zenodo.21358937
+> Xiangpeng Fu. *HUICRSync v0.1.1*. Zenodo, 2026. https://doi.org/10.5281/zenodo.21380424
 
 Machine-readable citation metadata is provided in [`CITATION.cff`](CITATION.cff). The TVCG DOI placeholder in that file will be replaced after the article DOI is assigned.
 
