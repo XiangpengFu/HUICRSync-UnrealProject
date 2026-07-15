@@ -69,3 +69,8 @@ Machine-readable citation metadata is provided in [`CITATION.cff`](CITATION.cff)
 Original HUICRSync source code, plugin logic, project glue code, and documentation are released under the MIT License.
 
 Unreal Engine, Epic template content, Meta/Oculus plugins, nDisplay/Switchboard components, Marketplace/Fab assets, and other third-party assets remain governed by their own license terms. See `THIRD_PARTY_NOTICES.md`.
+
+## Acknowledgments
+
+This work was conducted with the financial support of the Research Ireland Centre for Research Training in Digitally-Enhanced Reality (d-real) under Grant No. 18/CRT/6224. For the purpose of Open Access, the author has applied a CC BY public copyright licence to any Author Accepted Manuscript version arising from this submission.
+
