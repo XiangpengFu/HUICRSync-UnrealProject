@@ -1,4 +1,4 @@
-# HUICRSync Unreal Project
+# HUICRSync Unreal Project (UE5.6.1-v85)
 
 HUICRSync Unreal Project is a configured Unreal Engine project containing the HUICRSync runtime plugin. The plugin provides a reusable PC/HMD synchronization layer for mixed-reality workflows using UDP state packets, reliable UDP commands, calibration state, nDisplay screen binding, and synchronized runtime actor spawning.
 
