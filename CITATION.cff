@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use this software, please cite both the software and the preferred article."
 title: "HUICRSync"
 type: software
-version: "0.1.0"
-date-released: "2026-07-14"
+version: "0.1.1"
+date-released: "2026-07-15"
 doi: "10.5281/zenodo.21358937"
 authors:
   - family-names: "Fu"
