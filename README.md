@@ -4,6 +4,8 @@ HUICRSync Unreal Project is a configured Unreal Engine project containing the HU
 
 This repository is published as a full Unreal project instead of a plugin-only package so users can open a prepared project, inspect the PC/HMD target setup, and test the plugin with the included maps and plugin content.
 
+HUICRSync enables cross-reality (CR) applications by supporting the integration and spatial calibration of a Meta Quest 3 headset with any number of PC-driven 2D displays, regardless of their physical size or spatial arrangement. It keeps application state and runtime data synchronized between the HMD and PC, while its payload system supports commonly used data across common Unreal Engine gameplay actor types, including user-defined synchronized actors.
+
 Documentation: https://drive.google.com/drive/folders/1wnXhe9kLRG9142FA9zwQtBwjH6FOyuYs?usp=drive_link
 
 Tutorial Video: https://youtu.be/dEcZ0Hj-dEo
@@ -69,5 +71,4 @@ Machine-readable citation metadata is provided in [`CITATION.cff`](CITATION.cff)
 Original HUICRSync source code, plugin logic, project glue code, and documentation are released under the MIT License.
 
 Unreal Engine, Epic template content, Meta/Oculus plugins, nDisplay/Switchboard components, Marketplace/Fab assets, and other third-party assets remain governed by their own license terms. See `THIRD_PARTY_NOTICES.md`.
-
 
