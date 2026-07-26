@@ -10,7 +10,7 @@ Documentation: https://drive.google.com/drive/folders/1wnXhe9kLRG9142FA9zwQtBwjH
 
 Tutorial Video: https://youtu.be/dEcZ0Hj-dEo
 
-Full Experience Video (implemented with HUICRSync): https://youtu.be/Jl1Pwlp3yjA
+Full Experience Video (implemented with HUICRSync): https://youtu.be/5KrI0g_-2fc
 
 TVCG Paper DOI: `10.1109/TVCG.XXXXXXX` (placeholder; replace after the DOI is assigned)
 
