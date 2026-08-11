@@ -30,6 +30,7 @@ Plugins/**/Saved/
 # Local Codex / agent workspace metadata
 .agents/
 .codex/
+MULTIPLAYER_EXPANSION_PLAN.md
 
 # OS files
 Thumbs.db
