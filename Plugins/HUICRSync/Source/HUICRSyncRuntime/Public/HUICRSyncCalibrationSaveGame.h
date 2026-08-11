@@ -44,4 +44,12 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Calibration")
 	bool bMotionParallaxState = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Calibration")
+	bool bHasSavedHMDPCTransforms = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Calibration")
+	FTransform HMDToPCTransform = FTransform::Identity;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Calibration")
+	FTransform PCToHMDTransform = FTransform::Identity;
 };

@@ -89,7 +89,7 @@ void AHUICRSyncActor::QueueSpawnMirror()
 
 	if (SyncSubsystem->Role == EHUICRSyncRole::PC)
 	{
-		SyncSubsystem->QueueSpawnMirror(GetRemoteCounterpartClass(), ActorID, ConvertPCTransformToHMD(GetActorTransform()), ActorInitPayloadData);
+		SyncSubsystem->QueueSpawnMirror(GetRemoteCounterpartClass(), ActorID, GetActorTransform(), ActorInitPayloadData);
 		return;
 	}
 

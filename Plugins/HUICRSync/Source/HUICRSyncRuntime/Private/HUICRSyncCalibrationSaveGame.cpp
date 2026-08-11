@@ -8,4 +8,6 @@ UHUICRSyncCalibrationSaveGame::UHUICRSyncCalibrationSaveGame()
 	ScreenRotationMap.Add(0, FRotator::ZeroRotator);
 	ScreenScaleMap.Add(0, FVector::OneVector);
 	ShouldScreenControlRemoteMap.Add(0, true);
+	HMDToPCTransform = FTransform::Identity;
+	PCToHMDTransform = FTransform::Identity;
 }

@@ -50,6 +50,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload")
 	void DeserializePayload();
 
+	UFUNCTION(BlueprintPure, Category = "HUICR Sync|Transform")
+	FTransform ConvertHMDTransformToPC(const FTransform& InHMDTransform) const;
+
+	UFUNCTION(BlueprintPure, Category = "HUICR Sync|Transform")
+	FTransform ConvertPCTransformToHMD(const FTransform& InPCTransform) const;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

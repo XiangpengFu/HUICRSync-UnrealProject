@@ -49,6 +49,14 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
 	TArray<AHUICRSyncCalibrator_HMD*> RegisteredCalibrators;
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	FHUICRSyncCalibratorPayload LastPCCalibratorPayload;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	bool bHasLocalCalibrationReference = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	bool bWaitingForPCCalibrationReference = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Calibration|Spawn")
 	TSubclassOf<AHUICRSyncCalibrator_HMD> CalibratorClass;
@@ -103,6 +111,14 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Calibration")
 	bool SendCalibrationAndScreens();
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Calibration")
+	bool RequestPCCalibrationReference();
+
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Calibration")
+	bool RecalculateLocalHMDPCTransforms(const FHUICRSyncCalibratorPayload& PCCalibratorPayload);
+
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Calibration")
+	bool SendCalibrationReferenceAck();
 
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Calibration")
 	int32 SpawnDissolveBoxesForRegisteredScreens();
@@ -173,6 +189,9 @@ protected:
 	virtual void HandleNetDataReceived() override;
 
 	bool ApplyMotionParallaxState(bool bNewState, bool bUpdatePreference, bool bSavePreference);
+	AHUICRSyncCalibrator_HMD* FindRegisteredCalibratorByID(int32 CalibratorID) const;
+	FHUICRSyncScreenPayload ConvertScreenPayloadHMDToPC(const FHUICRSyncScreenPayload& Payload) const;
+	FHUICRSyncScreenPayload ConvertScreenPayloadPCToHMD(const FHUICRSyncScreenPayload& Payload) const;
 	void RestoreRegisteredScreenIDsAndCalibration();
 	void PrepareRegisteredScreensForSave();
 	TArray<int32> BuildSavedScreenIDFallbackOrder() const;

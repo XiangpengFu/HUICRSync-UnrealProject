@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "HUICRSyncManagerBase.h"
+#include "TimerManager.h"
 #include "HUICRSyncPCManagerBase.generated.h"
 
 class UStaticMeshComponent;
@@ -72,6 +73,14 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Calibration")
 	FVector PCCalibratorScale = FVector::OneVector;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Calibration")
+	float PCCalibrationReferenceSendInterval = 0.1f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	bool bWaitingForHMDCalibrationReferenceAck = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	int32 PCCalibrationReferenceSendCount = 0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|nDisplay")
 	bool bRestoreDefaultViewportWhenMotionParallaxDisabled = true;
@@ -139,6 +148,17 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Calibration")
 	void ApplyPCCalibratorScale();
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Calibration")
+	bool SendPCCalibrationReference();
+
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Calibration")
+	void StartSendingPCCalibrationReferenceUntilAck();
+
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Calibration")
+	void StopSendingPCCalibrationReference();
+
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Calibration")
+	void CompleteCalibrationAfterHMDReferenceAck();
 
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|nDisplay")
 	bool InitializeNDisplayScreens();
@@ -176,6 +196,7 @@ public:
 protected:
 	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
 	FTransform PCCalibratorTransform;
+	FTimerHandle PCCalibrationReferenceTimerHandle;
 
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -196,6 +217,7 @@ protected:
 
 	UFUNCTION()
 	void OnSubsystemCommandReceived(const FString& Address, const TArray<FHUICRSyncCommandArg>& Args);
+	void SendPCCalibrationReferenceTick();
 
 	FHUICRSyncPCScreenBinding* FindPCScreenBinding(int32 ScreenID);
 	const FHUICRSyncPCScreenBinding* FindPCScreenBinding(int32 ScreenID) const;

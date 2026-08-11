@@ -388,6 +388,12 @@ bool AHUICRSyncHMDManagerBase::LoadCalibrationData()
 	if (SyncSubsystem)
 	{
 		SyncSubsystem->bMotionParallaxState = bMotionParallaxState;
+		if (CalibrationSaveGame->bHasSavedHMDPCTransforms)
+		{
+			SyncSubsystem->HMDToPCTransform = CalibrationSaveGame->HMDToPCTransform;
+			SyncSubsystem->PCToHMDTransform = CalibrationSaveGame->PCToHMDTransform;
+			bHasLocalCalibrationReference = true;
+		}
 	}
 
 	RestoreRegisteredScreenIDsAndCalibration();
@@ -419,6 +425,12 @@ bool AHUICRSyncHMDManagerBase::SaveCalibrationData()
 	CalibrationSaveGame->TargetPCSyncPort = RemoteSyncPort;
 	CalibrationSaveGame->RetargetPawnScale = RetargetPawnScale;
 	CalibrationSaveGame->bMotionParallaxState = bMotionParallaxState;
+	if (SyncSubsystem && bHasLocalCalibrationReference)
+	{
+		CalibrationSaveGame->bHasSavedHMDPCTransforms = true;
+		CalibrationSaveGame->HMDToPCTransform = SyncSubsystem->HMDToPCTransform;
+		CalibrationSaveGame->PCToHMDTransform = SyncSubsystem->PCToHMDTransform;
+	}
 	PrepareRegisteredScreensForSave();
 
 	AHUICRSyncCalibrator_HMD* MainCalibrator = nullptr;
@@ -606,6 +618,40 @@ int32 AHUICRSyncHMDManagerBase::SpawnCalibrators()
 	return SpawnedCount;
 }
 
+AHUICRSyncCalibrator_HMD* AHUICRSyncHMDManagerBase::FindRegisteredCalibratorByID(int32 CalibratorID) const
+{
+	for (AHUICRSyncCalibrator_HMD* Calibrator : RegisteredCalibrators)
+	{
+		if (IsValid(Calibrator) && Calibrator->GetEffectiveCalibratorID() == CalibratorID)
+		{
+			return Calibrator;
+		}
+	}
+
+	return nullptr;
+}
+
+FHUICRSyncScreenPayload AHUICRSyncHMDManagerBase::ConvertScreenPayloadHMDToPC(const FHUICRSyncScreenPayload& Payload) const
+{
+	FHUICRSyncScreenPayload ConvertedPayload = Payload;
+	if (SyncSubsystem)
+	{
+		ConvertedPayload.Transform = SyncSubsystem->ConvertHMDTransformToPC(Payload.Transform);
+		ConvertedPayload.InitialTransform = SyncSubsystem->ConvertHMDTransformToPC(Payload.InitialTransform);
+	}
+	return ConvertedPayload;
+}
+
+FHUICRSyncScreenPayload AHUICRSyncHMDManagerBase::ConvertScreenPayloadPCToHMD(const FHUICRSyncScreenPayload& Payload) const
+{
+	FHUICRSyncScreenPayload ConvertedPayload = Payload;
+	if (SyncSubsystem)
+	{
+		ConvertedPayload.Transform = SyncSubsystem->ConvertPCTransformToHMD(Payload.Transform);
+		ConvertedPayload.InitialTransform = SyncSubsystem->ConvertPCTransformToHMD(Payload.InitialTransform);
+	}
+	return ConvertedPayload;
+}
 bool AHUICRSyncHMDManagerBase::SendCalibrationAndScreens()
 {
 	if (!SyncSubsystem)
@@ -613,23 +659,18 @@ bool AHUICRSyncHMDManagerBase::SendCalibrationAndScreens()
 		return false;
 	}
 
-	bool bQueuedAnyPayload = false;
-
-	for (AHUICRSyncCalibrator_HMD* Calibrator : RegisteredCalibrators)
+	if (!bHasLocalCalibrationReference)
 	{
-		if (IsValid(Calibrator) && Calibrator->GetEffectiveCalibratorID() == 0)
-		{
-			const FHUICRSyncCalibratorPayload Payload = Calibrator->BuildCalibratorPayload();
-			bQueuedAnyPayload |= QueueCalibratorPayload(Payload);
-			break;
-		}
+		UE_LOG(LogTemp, Warning, TEXT("HUICRSync HMD cannot send calibration screens before PC calibration reference is applied."));
+		return false;
 	}
 
+	bool bQueuedAnyPayload = false;
 	for (AHUICRSyncScreen* Screen : RegisteredScreens)
 	{
 		if (IsValid(Screen))
 		{
-			bQueuedAnyPayload |= QueueScreenPayload(Screen->BuildScreenPayload());
+			bQueuedAnyPayload |= QueueScreenPayload(ConvertScreenPayloadHMDToPC(Screen->BuildScreenPayload()));
 		}
 	}
 
@@ -639,6 +680,76 @@ bool AHUICRSyncHMDManagerBase::SendCalibrationAndScreens()
 	}
 
 	return bQueuedAnyPayload;
+}
+
+bool AHUICRSyncHMDManagerBase::RequestPCCalibrationReference()
+{
+	if (!SyncSubsystem && !InitializeManager())
+	{
+		return false;
+	}
+
+	if (!SyncSubsystem)
+	{
+		return false;
+	}
+
+	bWaitingForPCCalibrationReference = true;
+	const bool bRequestSent = SyncSubsystem->SendReliableCommand(TEXT("/FromHMD/Calibration/RequestPCReference"), {});
+	if (!bRequestSent)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("HUICRSync failed to request PC calibration reference."));
+	}
+	return bRequestSent;
+}
+
+bool AHUICRSyncHMDManagerBase::RecalculateLocalHMDPCTransforms(const FHUICRSyncCalibratorPayload& PCCalibratorPayload)
+{
+	if (!SyncSubsystem)
+	{
+		return false;
+	}
+
+	AHUICRSyncCalibrator_HMD* HMDCalibrator = FindRegisteredCalibratorByID(PCCalibratorPayload.ActorID);
+	if (!IsValid(HMDCalibrator))
+	{
+		HMDCalibrator = FindRegisteredCalibratorByID(0);
+	}
+	if (!IsValid(HMDCalibrator) && RegisteredCalibrators.Num() > 0)
+	{
+		HMDCalibrator = RegisteredCalibrators[0];
+	}
+	if (!IsValid(HMDCalibrator))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("HUICRSync HMD cannot calculate local transforms because no HMD calibrator is registered."));
+		return false;
+	}
+
+	LastPCCalibratorPayload = PCCalibratorPayload;
+	const FTransform HMDCalibratorTransform = HMDCalibrator->GetActorTransform();
+	SyncSubsystem->HMDToPCTransform = HMDCalibratorTransform.Inverse() * PCCalibratorPayload.Transform;
+	SyncSubsystem->PCToHMDTransform = PCCalibratorPayload.Transform.Inverse() * HMDCalibratorTransform;
+	bHasLocalCalibrationReference = true;
+
+	if (CalibrationSaveGame || LoadCalibrationData())
+	{
+		CalibrationSaveGame->bHasSavedHMDPCTransforms = true;
+		CalibrationSaveGame->HMDToPCTransform = SyncSubsystem->HMDToPCTransform;
+		CalibrationSaveGame->PCToHMDTransform = SyncSubsystem->PCToHMDTransform;
+		UGameplayStatics::SaveGameToSlot(CalibrationSaveGame, CalibrationSaveSlotName, CalibrationSaveUserIndex);
+	}
+
+	return true;
+}
+
+bool AHUICRSyncHMDManagerBase::SendCalibrationReferenceAck()
+{
+	if (!SyncSubsystem && !InitializeManager())
+	{
+		return false;
+	}
+
+	return SyncSubsystem ? SyncSubsystem->SendReliableCommand(TEXT("/FromHMD/Calibration/ReferenceApplied"), {}) : false;
 }
 
 int32 AHUICRSyncHMDManagerBase::SpawnDissolveBoxesForRegisteredScreens()
@@ -673,6 +784,8 @@ void AHUICRSyncHMDManagerBase::ChangeCalibrationState()
 	if (SyncSubsystem->bCalibrationState)
 	{
 		SyncSubsystem->bGameStopped = true;
+		bHasLocalCalibrationReference = false;
+		bWaitingForPCCalibrationReference = false;
 		SyncSubsystem->ClearLocalSyncActors();
 		SyncSubsystem->SendReliableCommandBool(TEXT("/FromHMD/Calibration/CalibrationState"), true);
 		ApplyMotionParallaxState(false, false, false);
@@ -683,7 +796,7 @@ void AHUICRSyncHMDManagerBase::ChangeCalibrationState()
 	if (!SyncSubsystem->bCalibrationState)
 	{
 		SaveCalibrationData();
-		SendCalibrationAndScreens();
+		RequestPCCalibrationReference();
 		ApplyMotionParallaxState(bMotionParallaxState, false, false);
 	}
 }
@@ -962,6 +1075,13 @@ void AHUICRSyncHMDManagerBase::HandleNetDataReceived()
 	if (GetFirstPayload(EHUICRSyncActorType::HUICalibrator, Entry) && DecodeCalibratorEntry(Entry, CalibratorPayload))
 	{
 		OnCalibratorPayloadReceived.Broadcast(CalibratorPayload);
+
+		if (bWaitingForPCCalibrationReference && RecalculateLocalHMDPCTransforms(CalibratorPayload))
+		{
+			bWaitingForPCCalibrationReference = false;
+			SendCalibrationAndScreens();
+			SendCalibrationReferenceAck();
+		}
 	}
 
 	bool bAppliedScreenPayload = false;
@@ -978,17 +1098,18 @@ void AHUICRSyncHMDManagerBase::HandleNetDataReceived()
 					continue;
 				}
 
+				const FHUICRSyncScreenPayload LocalScreenPayload = ConvertScreenPayloadPCToHMD(ScreenPayload);
 				for (AHUICRSyncScreen* Screen : RegisteredScreens)
 				{
-					if (IsValid(Screen) && Screen->ScreenID == ScreenPayload.ScreenID)
+					if (IsValid(Screen) && Screen->ScreenID == LocalScreenPayload.ScreenID)
 					{
-						Screen->ApplyScreenPayload(ScreenPayload);
+						Screen->ApplyScreenPayload(LocalScreenPayload);
 						bAppliedScreenPayload = true;
 						break;
 					}
 				}
 
-				OnScreenPayloadReceived.Broadcast(ScreenPayload);
+				OnScreenPayloadReceived.Broadcast(LocalScreenPayload);
 			}
 		}
 	}

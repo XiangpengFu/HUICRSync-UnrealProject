@@ -39,6 +39,8 @@ void AHUICRSyncPCManagerBase::BeginPlay()
 
 void AHUICRSyncPCManagerBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	StopSendingPCCalibrationReference();
+
 	if (SyncSubsystem)
 	{
 		SyncSubsystem->OnCalibrationStateChanged.RemoveDynamic(this, &AHUICRSyncPCManagerBase::OnSubsystemCalibrationStateChanged);
@@ -152,11 +154,86 @@ void AHUICRSyncPCManagerBase::ApplyPCCalibratorScale()
 	RefreshPCCalibratorTransform();
 }
 
+bool AHUICRSyncPCManagerBase::SendPCCalibrationReference()
+{
+	if (!SyncSubsystem)
+	{
+		return false;
+	}
+
+	if (!RefreshPCCalibratorTransform())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("HUICRSync PC cannot send calibration reference because PC calibrator transform is unavailable."));
+		return false;
+	}
+
+	FHUICRSyncCalibratorPayload Payload;
+	Payload.ActorID = 0;
+	Payload.Transform = PCCalibratorTransform;
+	const bool bQueuedPayload = QueueCalibratorPayload(Payload);
+	if (bQueuedPayload)
+	{
+		SyncSubsystem->SendAllQueuedStates();
+		++PCCalibrationReferenceSendCount;
+	}
+	return bQueuedPayload;
+}
+
+void AHUICRSyncPCManagerBase::SendPCCalibrationReferenceTick()
+{
+	if (bWaitingForHMDCalibrationReferenceAck)
+	{
+		SendPCCalibrationReference();
+	}
+}
+
+void AHUICRSyncPCManagerBase::StartSendingPCCalibrationReferenceUntilAck()
+{
+	bWaitingForHMDCalibrationReferenceAck = true;
+	PCCalibrationReferenceSendCount = 0;
+	SendPCCalibrationReference();
+
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(PCCalibrationReferenceTimerHandle);
+		World->GetTimerManager().SetTimer(
+			PCCalibrationReferenceTimerHandle,
+			this,
+			&AHUICRSyncPCManagerBase::SendPCCalibrationReferenceTick,
+			FMath::Max(0.02f, PCCalibrationReferenceSendInterval),
+			true);
+	}
+}
+
+void AHUICRSyncPCManagerBase::StopSendingPCCalibrationReference()
+{
+	bWaitingForHMDCalibrationReferenceAck = false;
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(PCCalibrationReferenceTimerHandle);
+	}
+}
+
+void AHUICRSyncPCManagerBase::CompleteCalibrationAfterHMDReferenceAck()
+{
+	if (!SyncSubsystem)
+	{
+		return;
+	}
+
+	StopSendingPCCalibrationReference();
+	RestoreDefaultViewport();
+	SyncSubsystem->bCalibrationState = false;
+	SyncSubsystem->OnCalibrationStateChanged.Broadcast(false);
+	SyncSubsystem->OnCalibrationReady.Broadcast();
+	SyncSubsystem->StartInitialSpawnSync();
+}
+
 bool AHUICRSyncPCManagerBase::SendLocalScreenPayload(int32 ScreenID, const FTransform& ScreenTransform, bool bRemoteControlsLocalScreen)
 {
 	FHUICRSyncScreenPayload Payload;
 	Payload.ScreenID = ScreenID;
-	Payload.Transform = SyncSubsystem ? SyncSubsystem->ConvertPCTransformToHMD(ScreenTransform) : ScreenTransform;
+	Payload.Transform = ScreenTransform;
 	Payload.InitialTransform = Payload.Transform;
 	Payload.bRemoteControlsLocalScreen = bRemoteControlsLocalScreen;
 	return QueueScreenPayload(Payload);
@@ -364,9 +441,8 @@ bool AHUICRSyncPCManagerBase::ApplyHMDScreenPayload(const FHUICRSyncScreenPayloa
 	{
 		RestorePCScreen(Payload.ScreenID);
 
-		// The main-screen response must use the coordinate conversion rebuilt
-		// from the restored PC main screen. HandleNetDataReceived sends it after
-		// refreshing the PC calibrator and HMD/PC transforms.
+		// HMD sends screen payloads in PC space after applying the PC calibrator reference.
+		// If PC owns this screen, send the restored PC-space screen back for HMD-side conversion.
 		if (Payload.ScreenID != 0)
 		{
 			SendPCScreenPayload(Payload.ScreenID);
@@ -374,7 +450,7 @@ bool AHUICRSyncPCManagerBase::ApplyHMDScreenPayload(const FHUICRSyncScreenPayloa
 		return true;
 	}
 
-	FTransform PCScreenTransform = SyncSubsystem ? SyncSubsystem->ConvertHMDTransformToPC(Payload.Transform) : Payload.Transform;
+	FTransform PCScreenTransform = Payload.Transform;
 	if (Payload.ScreenID == 0)
 	{
 		FTransform MainScreenTransform = Binding->InitialTransform;
@@ -385,9 +461,7 @@ bool AHUICRSyncPCManagerBase::ApplyHMDScreenPayload(const FHUICRSyncScreenPayloa
 			Binding->InitialTransform.GetRotation() * HMDRotationDelta;
 		MainScreenTransform.SetRotation(MainScreenRotation.GetNormalized());
 
-		// Scale must use the same HMD-to-PC conversion as every other screen.
-		// This makes PC -> HMD restore followed by an unchanged HMD -> PC update
-		// a round trip instead of treating the restored MRUK scale as a new edit.
+		// Keep the PC main screen thickness from nDisplay while accepting the HMD-adjusted Y/Z scale in PC space.
 		FVector MainScreenScale = PCScreenTransform.GetScale3D();
 		MainScreenScale.X = Binding->InitialTransform.GetScale3D().X;
 		MainScreenTransform.SetScale3D(MainScreenScale);
@@ -473,7 +547,7 @@ bool AHUICRSyncPCManagerBase::ApplyHMDTransformToDefaultViewport(const FTransfor
 	}
 
 	//OnHMDTransformReceived.Broadcast(HMDTransform);
-	LastResolvedDefaultViewportTransform = SyncSubsystem->ConvertHMDTransformToPC(HMDTransform);
+	LastResolvedDefaultViewportTransform = HMDTransform;
 	LastResolvedDefaultViewportTransform.SetScale3D(FVector::OneVector);
 	OnDefaultViewportTransformResolved.Broadcast(LastResolvedDefaultViewportTransform);
 
@@ -527,6 +601,24 @@ void AHUICRSyncPCManagerBase::OnSubsystemSelectedScreenChanged(int32 ScreenID)
 
 void AHUICRSyncPCManagerBase::OnSubsystemCommandReceived(const FString& Address, const TArray<FHUICRSyncCommandArg>& Args)
 {
+	const bool bIsCalibrationReferenceRequest =
+		Address.Equals(TEXT("/FromHMD/Calibration/RequestPCReference"), ESearchCase::IgnoreCase) ||
+		Address.Equals(TEXT("FromHMD/Calibration/RequestPCReference"), ESearchCase::IgnoreCase);
+	if (bIsCalibrationReferenceRequest)
+	{
+		StartSendingPCCalibrationReferenceUntilAck();
+		return;
+	}
+
+	const bool bIsCalibrationReferenceApplied =
+		Address.Equals(TEXT("/FromHMD/Calibration/ReferenceApplied"), ESearchCase::IgnoreCase) ||
+		Address.Equals(TEXT("FromHMD/Calibration/ReferenceApplied"), ESearchCase::IgnoreCase);
+	if (bIsCalibrationReferenceApplied)
+	{
+		CompleteCalibrationAfterHMDReferenceAck();
+		return;
+	}
+
 	if (Args.IsEmpty())
 	{
 		return;
@@ -574,16 +666,6 @@ const FHUICRSyncPCScreenBinding* AHUICRSyncPCManagerBase::FindPCScreenBinding(in
 
 void AHUICRSyncPCManagerBase::HandleNetDataReceived()
 {
-	bool bCalibrationDataProcessed = false;
-	FHUICRSyncNetEntry Entry;
-	FHUICRSyncCalibratorPayload CalibratorPayload;
-	if (GetFirstPayload(EHUICRSyncActorType::HUICalibrator, Entry) && DecodeCalibratorEntry(Entry, CalibratorPayload))
-	{
-		LastHMDCalibratorPayload = CalibratorPayload;
-		OnCalibratorPayloadReceived.Broadcast(CalibratorPayload);
-		bCalibrationDataProcessed = RecalculateHMDPCTransforms();
-	}
-
 	if (!SyncSubsystem)
 	{
 		return;
@@ -615,14 +697,7 @@ void AHUICRSyncPCManagerBase::HandleNetDataReceived()
 			ApplyHMDScreenPayload(*MainScreenPayload);
 			OnScreenPayloadReceived.Broadcast(*MainScreenPayload);
 
-			// The PC calibrator follows the main screen. Refresh the coordinate
-			// conversion after resolving the main screen and before other screens.
-			if (bCalibrationDataProcessed)
-			{
-				bCalibrationDataProcessed = RecalculateHMDPCTransforms();
-			}
-
-			if (!MainScreenPayload->bRemoteControlsLocalScreen && bCalibrationDataProcessed)
+			if (!MainScreenPayload->bRemoteControlsLocalScreen)
 			{
 				SendPCScreenPayload(MainScreenPayload->ScreenID);
 			}
@@ -638,14 +713,5 @@ void AHUICRSyncPCManagerBase::HandleNetDataReceived()
 			ApplyHMDScreenPayload(ScreenPayload);
 			OnScreenPayloadReceived.Broadcast(ScreenPayload);
 		}
-	}
-
-	if (bCalibrationDataProcessed)
-	{
-		RestoreDefaultViewport();
-		SyncSubsystem->bCalibrationState = false;
-		SyncSubsystem->OnCalibrationStateChanged.Broadcast(false);
-		SyncSubsystem->OnCalibrationReady.Broadcast();
-		SyncSubsystem->StartInitialSpawnSync();
 	}
 }

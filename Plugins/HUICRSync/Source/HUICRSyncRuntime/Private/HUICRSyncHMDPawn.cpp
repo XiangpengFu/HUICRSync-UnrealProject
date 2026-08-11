@@ -57,6 +57,15 @@ void AHUICRSyncHMDPawn::DeserializePayload()
 	ActorReceivePayloadData = FoundPayload->PayloadBytes;
 }
 
+FTransform AHUICRSyncHMDPawn::ConvertHMDTransformToPC(const FTransform& InHMDTransform) const
+{
+	return SyncSubsystem ? SyncSubsystem->ConvertHMDTransformToPC(InHMDTransform) : InHMDTransform;
+}
+
+FTransform AHUICRSyncHMDPawn::ConvertPCTransformToHMD(const FTransform& InPCTransform) const
+{
+	return SyncSubsystem ? SyncSubsystem->ConvertPCTransformToHMD(InPCTransform) : InPCTransform;
+}
 
 void AHUICRSyncHMDPawn::BeginPlay()
 {

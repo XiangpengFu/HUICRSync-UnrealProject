@@ -563,7 +563,7 @@ AHUICRSyncActor* UHUICRSyncSubsystem::SpawnSyncActorAsAuthority(UClass* SpawnCla
 		FHUICRSyncNetEntry Entry;
 		Entry.TypeCode = EHUICRSyncActorType::HUISpawnInGame;
 		Entry.ActorID = NewActorID;
-		UHUICRSyncPayloadLibrary::WriteSpawnMirrorPayload(Entry.PayloadBytes, RemoteSpawnClass, NewActorID, ConvertPCTransformToHMD(NewActor->GetActorTransform()), MirrorInitPayloadBytes);
+		UHUICRSyncPayloadLibrary::WriteSpawnMirrorPayload(Entry.PayloadBytes, RemoteSpawnClass, NewActorID, NewActor->GetActorTransform(), MirrorInitPayloadBytes);
 		RegisteredStates.Add(Entry);
 	}
 
@@ -612,7 +612,7 @@ int32 UHUICRSyncSubsystem::StartInitialSpawnSync()
 		const bool bQueuedMirror = QueueSpawnMirror(
 			SyncActor->GetRemoteCounterpartClass(),
 			SyncActor->ActorID,
-			ConvertPCTransformToHMD(SyncActor->GetActorTransform()),
+			SyncActor->GetActorTransform(),
 			SyncActor->ActorInitPayloadData);
 		if (bQueuedMirror)
 		{
@@ -1247,8 +1247,7 @@ bool UHUICRSyncSubsystem::HandleSpawnRequest(const FHUICRSyncNetEntry& Entry)
 		return false;
 	}
 
-	const FTransform PCTransform = ConvertHMDTransformToPC(RequestedHMDTransform);
-	AHUICRSyncActor* SpawnedActor = SpawnSyncActorAsAuthority(SpawnClass, PCTransform, InitPayloadBytes, bSpawnBackOnSender);
+	AHUICRSyncActor* SpawnedActor = SpawnSyncActorAsAuthority(SpawnClass, RequestedHMDTransform, InitPayloadBytes, bSpawnBackOnSender);
 	return IsValid(SpawnedActor);
 }
 
@@ -1282,7 +1281,8 @@ bool UHUICRSyncSubsystem::HandleSpawnMirror(const FHUICRSyncNetEntry& Entry)
 		return true;
 	}
 
-	return IsValid(SpawnSyncActorInternal(SpawnClass, ActorID, SpawnTransform, InitPayloadBytes));
+	const FTransform LocalSpawnTransform = Role == EHUICRSyncRole::HMD ? ConvertPCTransformToHMD(SpawnTransform) : SpawnTransform;
+	return IsValid(SpawnSyncActorInternal(SpawnClass, ActorID, LocalSpawnTransform, InitPayloadBytes));
 }
 
 bool UHUICRSyncSubsystem::DestroyLocalSyncActor(EHUICRSyncActorType TypeCode, int32 ActorID)
