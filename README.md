@@ -13,6 +13,7 @@ Tutorial Video: https://youtu.be/dEcZ0Hj-dEo
 Full Experience Video (implemented with HUICRSync): https://youtu.be/v97zrFEHjj0
 
 TVCG Paper DOI: `10.1109/TVCG.XXXXXXX` (placeholder; replace after the DOI is assigned)
+Preprint: https://arxiv.org/abs/2608.04971
 
 > [!IMPORTANT]
 > The current HMD implementation supports Meta Quest 3 only. Other HMDs and Meta Quest models are not currently supported.
