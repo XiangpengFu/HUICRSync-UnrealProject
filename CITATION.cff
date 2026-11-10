@@ -10,5 +10,5 @@ preferred-citation:
       given-names: "Mads"
   journal: "IEEE Transactions on Visualization and Computer Graphics"
   year: 2026
-  doi: "10.1109/TVCG.XXXXXXX" # TODO: Replace with the assigned TVCG DOI.
+  doi: "10.1109/TVCG.2026.3747530" # TODO: Replace with the assigned TVCG DOI.
   notes: "The TVCG DOI is pending and must replace the placeholder before final publication."
