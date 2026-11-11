@@ -57,7 +57,7 @@ This separation is important because Meta/Oculus runtime plugins can conflict wi
 
 If you use HUICRSync as a system or as part of a research methodology, please cite the associated TVCG paper:
 
-> Xiangpeng Fu and Mads Haahr. "Exploring Cross-Reality Transitions between Projections and Head-Mounted Displays for Immersive Digital Art." *IEEE Transactions on Visualization and Computer Graphics*, 2026. DOI: `10.1109/TVCG.XXXXXXX` (placeholder).
+> Xiangpeng Fu and Mads Haahr. "Exploring Cross-Reality Transitions between Projections and Head-Mounted Displays for Immersive Digital Art." *IEEE Transactions on Visualization and Computer Graphics*, 2026. DOI: `10.1109/TVCG.2026.3747530`.
 
 Machine-readable citation metadata is provided in [`CITATION.cff`](CITATION.cff). The TVCG DOI placeholder in that file will be replaced after the article DOI is assigned.
 
