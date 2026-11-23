@@ -66,4 +66,7 @@ protected:
 
 	UFUNCTION()
 	void HandlePrepareNetDataSend();
+
+private:
+	double NextHeadPoseSendTime = 0.0;
 };

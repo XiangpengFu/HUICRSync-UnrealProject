@@ -45,6 +45,10 @@ void AHUICRSyncScreen::ChangeScreenScaleZ(float ScaleZ)
 
 void AHUICRSyncScreen::ChangeIfControlRemoteScreen(bool bChecked)
 {
+	if (SyncSubsystem && SyncSubsystem->UsesManagedCalibration() && !SyncSubsystem->bCanEditPCScreenLayout)
+	{
+		return;
+	}
 	bControlRemoteScreen = bChecked;
 }
 

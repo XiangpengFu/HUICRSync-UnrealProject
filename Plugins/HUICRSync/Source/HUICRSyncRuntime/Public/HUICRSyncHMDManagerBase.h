@@ -183,6 +183,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload")
 	bool SendScreenPayload(int32 ScreenID, const FTransform& ScreenTransform, bool bHmdControlsPCScreen);
 
+	bool FinishCalibrationTurn();
+	bool ApplyCalibrationLayout(const FHUICRSyncCalibrationLayout& Layout, bool bHostTurn);
+	void RestoreGuestActorMapping(const FTransform& SavedPCMain);
+	void BeginLocalCalibrationTurn(const TMap<int32, bool>& SavedScreenControls);
+	void EndLocalCalibrationTurn(bool bAccepted);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -195,6 +201,27 @@ protected:
 	void RestoreRegisteredScreenIDsAndCalibration();
 	void PrepareRegisteredScreensForSave();
 	TArray<int32> BuildSavedScreenIDFallbackOrder() const;
+	void RestoreSavedGuestScreens();
+	AHUICRSyncScreen* SpawnLayoutScreen(int32 ScreenID, const FTransform& Transform);
+	AHUICRSyncScreen* FindUniqueMainScreen() const;
+	struct FCalibrationScreenState
+	{
+		FTransform Transform;
+		int32 ScreenID = INDEX_NONE;
+		bool bControlsPC = false;
+	};
+	TMap<TWeakObjectPtr<AHUICRSyncScreen>, FCalibrationScreenState> PreCalibrationScreens;
+	TArray<TWeakObjectPtr<AHUICRSyncScreen>> NewScreensThisTurn;
+	TMap<int32, FTransform> PendingGuestScreens;
+	FHUICRSyncGuestActorMapping PreCalibrationGuestActorMapping;
+	FTransform PreCalibrationTransform = FTransform::Identity;
+	FTransform PreCalibrationInverse = FTransform::Identity;
+	FTransform SubmittedMainReference = FTransform::Identity;
+	FTransform SubmittedMainScreenTransform = FTransform::Identity;
+	FGuid PendingAppliedLayoutId;
+	bool bAppliedCurrentTurn = false;
+	bool bHadLocalCalibrationReference = false;
+	bool bPendingGuestLayout = false;
 
 	UFUNCTION()
 	void HandleSyncSceneReady();

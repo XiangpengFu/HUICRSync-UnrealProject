@@ -57,6 +57,17 @@ struct HUICRSYNCRUNTIME_API FHUICRSyncPeerInfo
 	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync")
 	bool bConnected = false;
 
+	// Assigned by the PC for this connection. Zero means no participant has been assigned yet.
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Participants")
+	int32 ParticipantId = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Participants")
+	bool bHasHeadPose = false;
+
+	// Uses this participant's current HMD-to-PC transform. Spatial alignment requires calibration.
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Participants")
+	FTransform HeadPoseInPCSpace = FTransform::Identity;
+
 	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync")
 	double LastReceiveTime = 0.0;
 };
@@ -106,6 +117,27 @@ struct HUICRSYNCRUNTIME_API FHUICRSyncScreenPayload
 	}
 };
 
+// A complete layout expressed in the PC's coordinates.
+struct FHUICRSyncCalibrationLayout
+{
+	int32 Version = 0;
+	FGuid Id;
+	FTransform MainReference = FTransform::Identity;
+	TArray<FHUICRSyncScreenPayload> Screens;
+	// Per-round pose edits. The saved layout only contains the accepted poses and control preferences.
+	TSet<int32> EditedScreenIds;
+
+	FTransform GetMainReferenceForTurn(bool bHostTurn) const
+	{
+		FTransform Reference = MainReference;
+		if (!bHostTurn)
+		{
+			Reference.SetScale3D(FVector::OneVector);
+		}
+		return Reference;
+	}
+};
+
 USTRUCT(BlueprintType)
 struct HUICRSYNCRUNTIME_API FHUICRSyncTransformPayload
 {
@@ -118,6 +150,40 @@ struct HUICRSYNCRUNTIME_API FHUICRSyncTransformPayload
 	{
 		Ar << Data.Transform;
 		return Ar;
+	}
+};
+
+USTRUCT()
+struct FHUICRSyncGuestActorMapping
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FTransform PCMain = FTransform::Identity;
+
+	UPROPERTY()
+	FTransform HMDMain = FTransform::Identity;
+
+	UPROPERTY()
+	FVector ScaleRatio = FVector::ZeroVector;
+
+	bool IsValid() const
+	{
+		return !ScaleRatio.ContainsNaN() && ScaleRatio.GetAbsMin() > UE_SMALL_NUMBER;
+	}
+
+	FTransform ToHMD(const FTransform& Pose) const
+	{
+		return FTransform(HMDMain.GetRotation() * PCMain.GetRotation().Inverse() * Pose.GetRotation(),
+			HMDMain.TransformPosition(PCMain.InverseTransformPosition(Pose.GetLocation()) * ScaleRatio),
+			Pose.GetScale3D() * ScaleRatio);
+	}
+
+	FTransform ToPC(const FTransform& Pose) const
+	{
+		return FTransform(PCMain.GetRotation() * HMDMain.GetRotation().Inverse() * Pose.GetRotation(),
+			PCMain.TransformPosition(HMDMain.InverseTransformPosition(Pose.GetLocation()) / ScaleRatio),
+			Pose.GetScale3D() / ScaleRatio);
 	}
 };
 

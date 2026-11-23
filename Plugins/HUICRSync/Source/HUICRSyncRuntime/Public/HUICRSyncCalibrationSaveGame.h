@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/SaveGame.h"
+#include "HUICRSyncTypes.h"
 #include "HUICRSyncCalibrationSaveGame.generated.h"
 
 UCLASS()
@@ -52,4 +53,40 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Calibration")
 	FTransform PCToHMDTransform = FTransform::Identity;
+
+	UPROPERTY()
+	FGuid AppliedLayoutId;
+
+	UPROPERTY()
+	TMap<int32, FTransform> GuestScreenTransforms;
+
+	UPROPERTY()
+	FHUICRSyncGuestActorMapping GuestActorMapping;
+
+	UPROPERTY()
+	bool bUsesGuestScreenLayout = false;
+
+	UPROPERTY()
+	bool bUsedCalibratorScaleForHost = false;
+
+	UPROPERTY()
+	bool bScaledGuestScreenLayout = false;
+
+	UPROPERTY()
+	int32 PCLayoutVersion = 0;
+
+	UPROPERTY()
+	FGuid PCLayoutId;
+
+	UPROPERTY()
+	TArray<FHUICRSyncScreenPayload> PCLayoutScreens;
+
+	UPROPERTY()
+	FTransform PCMainReference = FTransform::Identity;
+
+	UPROPERTY()
+	bool bHasFixedGameViewpoint = false;
+
+	UPROPERTY()
+	FTransform FixedGameViewpointRelative = FTransform::Identity;
 };

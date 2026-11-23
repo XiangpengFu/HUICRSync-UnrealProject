@@ -1,7 +1,13 @@
 #include "HUICRSyncHMDPawn.h"
 
+#include "Camera/CameraComponent.h"
 #include "Engine/GameInstance.h"
 #include "HUICRSyncSubsystem.h"
+
+namespace
+{
+	constexpr double HeadPoseSendInterval = 1.0 / 15.0;
+}
 
 AHUICRSyncHMDPawn::AHUICRSyncHMDPawn()
 {
@@ -100,6 +106,32 @@ void AHUICRSyncHMDPawn::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void AHUICRSyncHMDPawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	if (!SyncSubsystem || SyncSubsystem->Role != EHUICRSyncRole::HMD ||
+		!SyncSubsystem->bConnectionState || !bSendDataToPeer || !IsLocallyControlled() || !IsPlayerControlled())
+	{
+		return;
+	}
+
+	const double Now = FPlatformTime::Seconds();
+	if (Now < NextHeadPoseSendTime)
+	{
+		return;
+	}
+	NextHeadPoseSendTime = Now + HeadPoseSendInterval;
+
+	// Participant tracking also runs before GameStart. Leave the existing Blueprint gameplay payload intact.
+	TInlineComponentArray<UCameraComponent*> Cameras(this);
+	for (const UCameraComponent* Camera : Cameras)
+	{
+		if (Camera->IsActive())
+		{
+			FTransform HeadPose = ConvertHMDTransformToPC(Camera->GetComponentTransform());
+			HeadPose.SetScale3D(FVector::OneVector);
+			SyncSubsystem->SendLocalHeadPose(HeadPose);
+			break;
+		}
+	}
 }
 
 void AHUICRSyncHMDPawn::OnChangeCalibrationState(bool bNewCalibrationState)

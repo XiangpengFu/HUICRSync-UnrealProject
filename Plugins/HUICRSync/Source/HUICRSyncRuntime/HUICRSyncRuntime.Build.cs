@@ -11,6 +11,8 @@ public class HUICRSyncRuntime : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"UMG",
+			"SlateCore",
 			"Sockets",
 			"Networking",
 			"StructUtils"

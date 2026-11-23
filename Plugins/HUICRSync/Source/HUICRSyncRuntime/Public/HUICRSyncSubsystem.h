@@ -9,7 +9,24 @@
 class FInternetAddr;
 class FSocket;
 class AHUICRSyncActor;
+class AHUICRSyncPCManagerBase;
+class AHUICRSyncHMDManagerBase;
+class UPrimitiveComponent;
 struct FIPv4Endpoint;
+
+enum class EHUICRSyncSceneOp : uint8
+{
+	Reset,
+	Spawn,
+	Destroy,
+	Ready
+};
+
+struct FHUICRSyncSceneOperation
+{
+	EHUICRSyncSceneOp Kind = EHUICRSyncSceneOp::Reset;
+	TArray<uint8> Bytes;
+};
 
 struct FHUICRSyncPeerRuntimeState
 {
@@ -17,7 +34,21 @@ struct FHUICRSyncPeerRuntimeState
 	TSharedPtr<FInternetAddr> UDPAddr;
 	TMap<uint32, FHUICRSyncPendingCommand> PendingReliableCommands;
 	TSet<uint32> ReceivedCommandIds;
-	FString RemoteSessionId;
+	FGuid RemoteSession;
+	int32 SenderPort = 0;
+	uint32 LastPoseSequence = 0;
+	int32 LastCalibrationRequest = 0;
+	int32 LastCompletedCalibrationRound = 0;
+	FGuid AppliedLayout;
+	FTransform HMDToPC = FTransform::Identity;
+	bool bHasCalibrated = false;
+	int32 SceneGeneration = 0;
+	int32 ReadySceneGeneration = 0;
+	int32 SceneSequence = 1;
+	int32 SceneSendOffset = 0;
+	bool bNeedsSceneSnapshot = false;
+	double NextSceneSendTime = 0;
+	TArray<FHUICRSyncSceneOperation> SceneOperations;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHUICRSyncConnectionStateChanged, bool, bConnected);
@@ -28,6 +59,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FHUICRSyncCommandReceived, const FS
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHUICRSyncWorldChanged, int32, WorldID);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHUICRSyncSelectedScreenChanged, int32, ScreenID);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHUICRSyncTaskCounterReceived, int32, TaskCounter);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(FHUICRSyncSceneRequestCompleted, int32, ParticipantId, int32, RequestId,
+	bool, bSpawnRequest, bool, bSucceeded, int32, ActorId);
 
 UCLASS(BlueprintType) 
 class HUICRSYNCRUNTIME_API UHUICRSyncSubsystem : public UGameInstanceSubsystem, public FTickableGameObject
@@ -48,6 +81,105 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync")
 	bool bConnectionState = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Participants")
+	int32 LocalParticipantId = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Participants")
+	int32 HostParticipantId = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Participants")
+	int32 ConnectedHMDCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Participants")
+	bool bIsLocalHMDHost = false;
+
+	/** Oldest connected headset first. Zero is reserved for no participant. */
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Participants")
+	TArray<int32> ConnectedParticipantIds;
+
+	UPROPERTY(BlueprintAssignable, Category = "HUICR Sync|Events")
+	FHUICRSyncSimpleEvent OnParticipantsChanged;
+
+	UPROPERTY(BlueprintAssignable, Category = "HUICR Sync|Calibration")
+	FHUICRSyncSimpleEvent OnCalibrationUIStateChanged;
+
+	/** Broadcast after the managed session changes bGameStopped and updates local Tick and physics. */
+	UPROPERTY(BlueprintAssignable, Category = "HUICR Sync|Calibration")
+	FHUICRSyncSimpleEvent OnGameplayPauseStateChanged;
+
+	/** First active participant in join order. Use ActiveCalibrationCount for parallel calibration. */
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	int32 ActiveCalibratorId = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration", meta=(DeprecatedProperty, DeprecationMessage="Guest calibration is parallel. Use ActiveCalibrationCount."))
+	int32 LocalQueuePosition = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	int32 ActiveCalibrationCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	bool bHostCalibrationActive = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	int32 ScreenLayoutVersion = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	TArray<int32> CalibrationScreenIds;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	bool bCanStartCalibration = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	bool bCanEditPCScreenLayout = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	bool bCanEditGameMotionParallax = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	bool bIsLocalHMDCalibrating = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	bool bLayoutUpdatedSinceMyCalibration = false;
+
+	/** True once this headset's current scene has been applied and confirmed by the PC. */
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Spawn")
+	bool bLocalSceneReady = false;
+
+	UPROPERTY(BlueprintAssignable, Category = "HUICR Sync|Spawn")
+	FHUICRSyncSceneRequestCompleted OnSceneActorRequestCompleted;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Spawn")
+	int32 LastSceneActorRequestId = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	bool bWaitingForCalibrationResult = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
+	FString CalibrationMessage;
+
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Calibration")
+	bool RequestCalibrationTurn();
+
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Calibration")
+	bool CancelCalibrationTurn();
+
+	void RegisterCalibrationManager(AHUICRSyncPCManagerBase* Manager);
+	void RegisterCalibrationManager(AHUICRSyncHMDManagerBase* Manager);
+	bool SubmitCalibration(const FHUICRSyncCalibrationLayout& LocalMeasurements);
+	bool RequestCalibrationPreview(int32 ScreenID);
+	bool UsesManagedCalibration() const { return bManagedCalibration; }
+	bool HasAppliedCalibration() const;
+	void RestoreLocalCalibrationId(const FGuid& LayoutId);
+	void SetCalibrationMessage(const FString& Message);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Network", meta=(ClampMin="0.1"))
+	float HeartbeatIntervalSeconds = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Network", meta=(ClampMin="0.5"))
+	float PeerTimeoutSeconds = 6.0f;
+
+	void SendLocalHeadPose(const FTransform& HeadPoseInPCSpace);
 
 	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync")
 	bool bCalibrationState = false;
@@ -187,6 +319,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Spawn", meta = (AutoCreateRefTerm = "InitPayloadBytes"))
 	bool SpawnSyncActor(UClass* SpawnClass, const FTransform& SpawnTransform, const TArray<uint8>& InitPayloadBytes);
 
+	/** Supply a transform in the calling device's local world. The original Spawn Sync Actor accepts PC-space transforms. */
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Spawn", meta = (AutoCreateRefTerm = "InitPayloadBytes"))
+	bool SpawnSyncActorFromLocalSpace(UClass* SpawnClass, const FTransform& SpawnTransform, const TArray<uint8>& InitPayloadBytes);
+
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Spawn", meta = (DisplayName = "Spawn Sync Actor"))
 	bool SpawnSyncActorSimple(UClass* SpawnClass, const FTransform& SpawnTransform);
 
@@ -252,10 +388,139 @@ public:
 	UFUNCTION(BlueprintPure, Category = "HUICR Sync|Transform")
 	FTransform ConvertPCTransformToHMD(const FTransform& InPCTransform) const;
 
+	FTransform ConvertHMDActorTransformToPC(const FTransform& Transform) const;
+	FTransform ConvertPCActorTransformToHMD(const FTransform& Transform) const;
+	const FHUICRSyncGuestActorMapping& GetGuestActorMapping() const { return GuestActorMapping; }
+	void SetLocalCalibrationMapping(const FTransform& ToHMD, const FTransform& ToPC,
+		const FHUICRSyncGuestActorMapping& GuestMapping);
+
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FHUICRSyncCalibrationTest;
+#endif
+	TWeakObjectPtr<AHUICRSyncPCManagerBase> CalibrationPC;
+	TWeakObjectPtr<AHUICRSyncHMDManagerBase> CalibrationHMD;
+	FHUICRSyncCalibrationLayout CommittedCalibration;
+	FHUICRSyncGuestActorMapping GuestActorMapping;
+	struct FCalibrationTurn
+	{
+		int32 Round = 0;
+		int32 LastPreviewSequence = 0;
+		bool bCanEditLayout = false;
+		FHUICRSyncCalibrationLayout SubmittedLayout;
+		FTransform HMDToPC = FTransform::Identity;
+		double ReplyDeadline = 0;
+	};
+	TMap<int32, FCalibrationTurn> CalibrationTurns;
+	FGuid LocalAppliedLayoutId;
+	int32 CalibrationRound = 0;
+	int32 CalibrationRevision = 0;
+	int32 CalibrationRequestSequence = 0;
+	int32 CalibrationPreviewSequence = 0;
+	double ClientSubmitDeadline = 0;
+	bool bManagedCalibration = false;
+	bool bCalibrationPaused = false;
+	bool bHasStartedGame = false;
+	bool bStartGameAfterCalibration = false;
+	bool bPendingHostCalibrationReady = false;
+	bool bAwaitingFirstSpawn = false;
+	bool bInitialCalibrationSceneReady = false;
+	int32 NotifiedLocalSceneGeneration = 0;
+	int32 CalibrationKnownHost = 0;
+	FGuid PendingLocalLayoutId;
+
+	struct FPausedPhysics
+	{
+		TWeakObjectPtr<UPrimitiveComponent> Component;
+		FVector LinearVelocity;
+		FVector AngularVelocity;
+		bool bWasAwake = false;
+	};
+	TArray<FPausedPhysics> PausedPhysics;
+	TArray<TWeakObjectPtr<AHUICRSyncActor>> PausedActorTicks;
+
+	bool HandleCalibrationCommand(FHUICRSyncPeerRuntimeState& Peer, const FHUICRSyncCommandPayload& Command);
+	void WriteCalibrationStatus(FArchive& Writer, int32 RecipientId);
+	void ReadCalibrationStatus(FArchive& Reader);
+	void PublishCalibrationStatus();
+	void TryGrantCalibrationTurn(int32 ParticipantId);
+	void EndCalibrationTurn(int32 ParticipantId, bool bCommitted);
+	void RefreshActiveCalibrations();
+	void UpdateCalibrationParticipants();
+	void TickCalibration();
+	void ResetCalibrationSession();
+	void SetCalibrationPaused(bool bPaused);
+	void PauseManagedActor(AHUICRSyncActor& Actor);
+	void NotifyGameplayPauseIfChanged(bool bWasStopped);
+	void BeginManagedGameplay();
+	void HandleManagedParallax(bool bEnabled);
+	FHUICRSyncPeerRuntimeState* FindCalibrationParticipant(int32 ParticipantId);
+
+	struct FManagedSceneActor
+	{
+		TSoftClassPtr<AHUICRSyncActor> RemoteClass;
+		TArray<uint8> InitialPayload;
+		int32 ExcludedParticipantId = 0;
+		bool bSpawnedAtRuntime = false;
+	};
+	TMap<FString, FManagedSceneActor> ManagedSceneActors;
+	TSet<FString> LocalOnlySceneActors;
+	struct FManagedActorState
+	{
+		FHUICRSyncNetEntry Entry;
+		uint64 Sequence = 0;
+	};
+	TMap<FString, FManagedActorState> LatestManagedActorStates;
+	uint64 ManagedStateSequence = 0;
+	TMap<int32, FManagedActorState> ReceivedManagedActorStates;
+	TSet<int32> RemovedSceneActorIds;
+	TMap<FString, TWeakObjectPtr<AHUICRSyncActor>> LocalSceneMirrors;
+	TArray<uint8> IncomingSceneOperation;
+	int32 IncomingSceneSequence = 0;
+	int32 LastAppliedSceneOffset = 0;
+	int32 LocalSceneGeneration = 0;
+	int32 ExpectedSceneGeneration = 0;
+	bool bManagedScenePrepared = false;
+	bool bSpawningManagedActor = false;
+
+	void PrepareManagedScene();
+	void StartManagedSceneForPeer(FHUICRSyncPeerRuntimeState& Peer);
+	void QueueManagedSceneSnapshot(FHUICRSyncPeerRuntimeState& Peer);
+	void DiscardManagedSceneTransfer(FHUICRSyncPeerRuntimeState& Peer);
+	void TickManagedScene();
+	bool HandleManagedSceneCommand(FHUICRSyncPeerRuntimeState& Peer, const FHUICRSyncCommandPayload& Command);
+	bool ApplyManagedSceneOperation(EHUICRSyncSceneOp Kind, const TArray<uint8>& Bytes);
+	void ClearLocalSceneMirrors();
+	void ResetManagedSceneConnection();
+	bool RegisterManagedSceneMirror(AHUICRSyncActor* Actor, UClass* RemoteClass, const TArray<uint8>& InitialPayload, int32 ExcludedParticipantId = 0);
+	void QueueManagedSceneMirror(FHUICRSyncPeerRuntimeState& Peer, AHUICRSyncActor& Actor, const FManagedSceneActor& Record);
+	void UnregisterManagedSceneMirror(AHUICRSyncActor& Actor);
+	bool SendManagedSpawnRequest(const TArray<uint8>& Payload);
+	bool SendManagedDestroyRequest(EHUICRSyncActorType TypeCode, int32 ActorId);
+	AHUICRSyncActor* SpawnSyncActorForPeers(UClass* SpawnClass, const FTransform& SpawnTransform,
+		const TArray<uint8>& InitPayloadBytes, bool bSpawnOnPeer, int32 ExcludedParticipantId);
+
 	FSocket* SenderSocket = nullptr;
 	FSocket* ReceiverSocket = nullptr;
 	TMap<FString, FHUICRSyncPeerRuntimeState> Peers;
+	TSet<FGuid> RetiredSessions;
+	FGuid LocalSession;
+	int32 NextParticipantId = 1;
+	int32 RosterRevision = 0;
+	double LastHeartbeatTime = 0;
+	uint32 PoseSequence = 0;
+
+	bool EnsureSenderSocket();
+	void ClearSessionTraffic();
+	void ResetLocalSession();
+	void WriteSessionHeader(FArchive& Writer, const FHUICRSyncPeerRuntimeState& Peer) const;
+	void TickPresence();
+	void SendPresence(const FHUICRSyncPeerRuntimeState& Peer, bool bLeaving);
+	void RemoveParticipant(const FString& PeerId);
+	void UpdatePCParticipants();
+	void ApplyHMDRoster(int32 Revision, const TArray<int32>& Participants);
+	void SetConnected(bool bConnected);
+	FHUICRSyncPeerRuntimeState* AcceptHandshake(const FIPv4Endpoint& Sender, const FHUICRSyncCommandPayload& Hello);
 
 	TArray<FHUICRSyncNetEntry> RegisteredStates;
 	TArray<FHUICRSyncNetEntry> ScreenRegisteredStates;
@@ -285,7 +550,7 @@ private:
 	void SendCommandAck(FHUICRSyncPeerRuntimeState& Peer, uint32 CommandId);
 	void TickReliableCommands();
 	void DestroySockets();
-	bool SendQueuedEntries(FHUICRSyncPeerRuntimeState& Peer, const TArray<FHUICRSyncNetEntry>& Entries, uint32 Magic);
+	bool SendQueuedEntries(FHUICRSyncPeerRuntimeState& Peer, const TArray<FHUICRSyncNetEntry>& Entries, uint32 Magic, uint64 StateSequence = 0);
 	void ProcessSpawnActorPackets();
 	bool HandleSpawnRequest(const FHUICRSyncNetEntry& Entry);
 	bool HandleSpawnMirror(const FHUICRSyncNetEntry& Entry);

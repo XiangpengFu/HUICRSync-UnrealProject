@@ -2,10 +2,12 @@
 
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "HUICRSyncCalibrationSaveGame.h"
 #include "HUICRSyncCalibrator_PC.h"
 #include "HUICRSyncPCScreenVisual.h"
 #include "HUICRSyncSubsystem.h"
 #include "Kismet/GameplayStatics.h"
+#include "Misc/Crc.h"
 
 #if HUICR_WITH_NDISPLAY
 #include "Components/DisplayClusterCameraComponent.h"
@@ -34,6 +36,8 @@ void AHUICRSyncPCManagerBase::BeginPlay()
 		SyncSubsystem->OnMotionParallaxStateChanged.AddDynamic(this, &AHUICRSyncPCManagerBase::OnSubsystemMotionParallaxStateChanged);
 		SyncSubsystem->OnSelectedScreenChanged.AddDynamic(this, &AHUICRSyncPCManagerBase::OnSubsystemSelectedScreenChanged);
 		SyncSubsystem->OnCommandReceived.AddDynamic(this, &AHUICRSyncPCManagerBase::OnSubsystemCommandReceived);
+		SyncSubsystem->OnParticipantsChanged.AddDynamic(this, &AHUICRSyncPCManagerBase::OnParticipantsChanged);
+		SyncSubsystem->RegisterCalibrationManager(this);
 	}
 }
 
@@ -47,6 +51,7 @@ void AHUICRSyncPCManagerBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		SyncSubsystem->OnMotionParallaxStateChanged.RemoveDynamic(this, &AHUICRSyncPCManagerBase::OnSubsystemMotionParallaxStateChanged);
 		SyncSubsystem->OnSelectedScreenChanged.RemoveDynamic(this, &AHUICRSyncPCManagerBase::OnSubsystemSelectedScreenChanged);
 		SyncSubsystem->OnCommandReceived.RemoveDynamic(this, &AHUICRSyncPCManagerBase::OnSubsystemCommandReceived);
+		SyncSubsystem->OnParticipantsChanged.RemoveDynamic(this, &AHUICRSyncPCManagerBase::OnParticipantsChanged);
 	}
 
 	Super::EndPlay(EndPlayReason);
@@ -189,6 +194,11 @@ void AHUICRSyncPCManagerBase::SendPCCalibrationReferenceTick()
 
 void AHUICRSyncPCManagerBase::StartSendingPCCalibrationReferenceUntilAck()
 {
+	if (!SyncSubsystem || SyncSubsystem->HostParticipantId == 0)
+	{
+		return;
+	}
+	CalibrationReferenceRecipientId = SyncSubsystem->HostParticipantId;
 	bWaitingForHMDCalibrationReferenceAck = true;
 	PCCalibrationReferenceSendCount = 0;
 	SendPCCalibrationReference();
@@ -207,10 +217,19 @@ void AHUICRSyncPCManagerBase::StartSendingPCCalibrationReferenceUntilAck()
 
 void AHUICRSyncPCManagerBase::StopSendingPCCalibrationReference()
 {
+	CalibrationReferenceRecipientId = 0;
 	bWaitingForHMDCalibrationReferenceAck = false;
 	if (UWorld* World = GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(PCCalibrationReferenceTimerHandle);
+	}
+}
+
+void AHUICRSyncPCManagerBase::OnParticipantsChanged()
+{
+	if (bWaitingForHMDCalibrationReferenceAck && CalibrationReferenceRecipientId != SyncSubsystem->HostParticipantId)
+	{
+		StopSendingPCCalibrationReference();
 	}
 }
 
@@ -443,7 +462,7 @@ bool AHUICRSyncPCManagerBase::ApplyHMDScreenPayload(const FHUICRSyncScreenPayloa
 
 		// HMD sends screen payloads in PC space after applying the PC calibrator reference.
 		// If PC owns this screen, send the restored PC-space screen back for HMD-side conversion.
-		if (Payload.ScreenID != 0)
+		if (Payload.ScreenID != 0 && (!SyncSubsystem || !SyncSubsystem->UsesManagedCalibration()))
 		{
 			SendPCScreenPayload(Payload.ScreenID);
 		}
@@ -549,18 +568,231 @@ bool AHUICRSyncPCManagerBase::ApplyHMDTransformToDefaultViewport(const FTransfor
 	//OnHMDTransformReceived.Broadcast(HMDTransform);
 	LastResolvedDefaultViewportTransform = HMDTransform;
 	LastResolvedDefaultViewportTransform.SetScale3D(FVector::OneVector);
-	OnDefaultViewportTransformResolved.Broadcast(LastResolvedDefaultViewportTransform);
-
+	LastTrackedGameViewpoint = LastResolvedDefaultViewportTransform;
+	bHasTrackedGameViewpoint = true;
 	DefaultViewportComponent->SetWorldTransform(LastResolvedDefaultViewportTransform);
+	OnDefaultViewportTransformResolved.Broadcast(LastResolvedDefaultViewportTransform);
 	return true;
 }
 
 void AHUICRSyncPCManagerBase::OnSubsystemMotionParallaxStateChanged(bool bNewMotionParallaxState)
 {
-	if (!bNewMotionParallaxState && bRestoreDefaultViewportWhenMotionParallaxDisabled)
+	if (!bNewMotionParallaxState && bRestoreDefaultViewportWhenMotionParallaxDisabled &&
+		!SyncSubsystem->UsesManagedCalibration())
 	{
 		RestoreDefaultViewport();
 	}
+}
+
+FTransform AHUICRSyncPCManagerBase::GetViewpointReference() const
+{
+	FTransform Origin = IsValid(NDisplayActor) ? NDisplayActor->GetActorTransform() : GetActorTransform();
+	Origin.SetScale3D(FVector::OneVector);
+	return Origin;
+}
+
+FString AHUICRSyncPCManagerBase::GetPCLayoutSaveSlot() const
+{
+	const FString Map = GetWorld()->GetOutermost()->GetName();
+	const FString DisplayConfig = IsValid(NDisplayActor) ? NDisplayActor->GetClass()->GetPathName() : GetClass()->GetPathName();
+	return FString::Printf(TEXT("HUICRSync_PC_%08x"), FCrc::StrCrc32(*(Map + TEXT("|") + DisplayConfig)));
+}
+
+FTransform AHUICRSyncPCManagerBase::GetMainCalibrationReference(const FHUICRSyncPCScreenBinding& Main) const
+{
+	FTransform Reference = Main.ScreenComponent->GetComponentTransform();
+	Reference.SetScale3D(IsValid(Main.SpawnedCalibrator) ? Main.SpawnedCalibrator->GetActorScale3D() : PCCalibratorScale);
+	return Reference;
+}
+
+bool AHUICRSyncPCManagerBase::CaptureCalibrationLayout(FHUICRSyncCalibrationLayout& Layout)
+{
+	const FHUICRSyncPCScreenBinding* Main = FindPCScreenBinding(0);
+	if (!Main || !IsValid(Main->ScreenComponent))
+	{
+		return false;
+	}
+	Layout.Screens.Reset();
+	for (const FHUICRSyncPCScreenBinding& Binding : PCScreenBindings)
+	{
+		if (!IsValid(Binding.ScreenComponent))
+		{
+			return false;
+		}
+		FHUICRSyncScreenPayload& Screen = Layout.Screens.AddDefaulted_GetRef();
+		Screen.ScreenID = Binding.ScreenID;
+		Screen.Transform = Binding.ScreenComponent->GetComponentTransform();
+		Screen.InitialTransform = Binding.InitialTransform;
+	}
+	Layout.MainReference = GetMainCalibrationReference(*Main);
+	return Layout.MainReference.IsValid() && Layout.MainReference.GetScale3D().GetAbsMin() > UE_SMALL_NUMBER;
+}
+
+bool AHUICRSyncPCManagerBase::PreviewHostLayout(const FHUICRSyncCalibrationLayout& Measurements,
+	const FHUICRSyncCalibrationLayout& CommittedLayout, FHUICRSyncCalibrationLayout& Result)
+{
+	FHUICRSyncCalibrationLayout Before;
+	if (!CaptureCalibrationLayout(Before) || Before.Screens.Num() > 48 ||
+		!Measurements.Screens.ContainsByPredicate([](const FHUICRSyncScreenPayload& Screen) { return Screen.ScreenID == 0; }))
+	{
+		return false;
+	}
+	if (Measurements.MainReference.GetScale3D().GetAbsMin() <= UE_SMALL_NUMBER)
+	{
+		return false;
+	}
+	const FTransform ToPC = Measurements.MainReference.Inverse() * Before.MainReference;
+	const bool bFirstLayout = !CommittedLayout.Id.IsValid();
+	TArray<FHUICRSyncScreenPayload> Screens = Measurements.Screens;
+	Screens.Sort([](const FHUICRSyncScreenPayload& A, const FHUICRSyncScreenPayload& B) { return A.ScreenID < B.ScreenID; });
+	for (FHUICRSyncScreenPayload& Screen : Screens)
+	{
+		if (!FindPCScreenBinding(Screen.ScreenID))
+		{
+			continue;
+		}
+		const bool bPoseEdited = Screen.bRemoteControlsLocalScreen &&
+			(bFirstLayout || Measurements.EditedScreenIds.Contains(Screen.ScreenID));
+		if (!bFirstLayout && !bPoseEdited)
+		{
+			continue;
+		}
+		Screen.Transform = Screen.Transform * ToPC;
+		Screen.InitialTransform = Screen.InitialTransform * ToPC;
+		if (ApplyHMDScreenPayload(Screen) && bPoseEdited)
+		{
+			Result.EditedScreenIds.Add(Screen.ScreenID);
+		}
+		OnScreenPayloadReceived.Broadcast(Screen);
+	}
+	if (!CaptureCalibrationLayout(Result))
+	{
+		RestoreCalibrationLayout(Before);
+		return false;
+	}
+	for (auto& Screen : Result.Screens)
+	{
+		const auto HasSameId = [&Screen](const FHUICRSyncScreenPayload& Candidate) { return Screen.ScreenID == Candidate.ScreenID; };
+		const FHUICRSyncScreenPayload* Input = Screens.FindByPredicate(HasSameId);
+		if (!Input)
+		{
+			Input = CommittedLayout.Screens.FindByPredicate(HasSameId);
+		}
+		Screen.bRemoteControlsLocalScreen = Input && Input->bRemoteControlsLocalScreen;
+	}
+	return true;
+}
+
+void AHUICRSyncPCManagerBase::RestoreCalibrationLayout(const FHUICRSyncCalibrationLayout& Layout)
+{
+	for (const FHUICRSyncPCScreenBinding& Binding : PCScreenBindings)
+	{
+		if (!IsValid(Binding.ScreenComponent))
+		{
+			continue;
+		}
+		const FHUICRSyncScreenPayload* Saved = Layout.Screens.FindByPredicate(
+			[&Binding](const FHUICRSyncScreenPayload& Screen) { return Screen.ScreenID == Binding.ScreenID; });
+		Binding.ScreenComponent->SetWorldTransform(Saved ? Saved->Transform : Binding.InitialTransform);
+		UpdatePCScreenVisual(Binding.ScreenID);
+	}
+	RefreshPCCalibratorTransform();
+}
+
+bool AHUICRSyncPCManagerBase::SaveCommittedCalibration(const FHUICRSyncCalibrationLayout& Layout, bool bGameMotionParallax)
+{
+	auto* Save = NewObject<UHUICRSyncCalibrationSaveGame>();
+	Save->PCLayoutVersion = Layout.Version;
+	Save->PCLayoutId = Layout.Id;
+	Save->PCLayoutScreens = Layout.Screens;
+	const FTransform Origin = GetViewpointReference();
+	for (FHUICRSyncScreenPayload& Screen : Save->PCLayoutScreens)
+	{
+		Screen.Transform = Screen.Transform.GetRelativeTransform(Origin);
+		Screen.InitialTransform = Screen.InitialTransform.GetRelativeTransform(Origin);
+	}
+	Save->PCMainReference = Layout.MainReference.GetRelativeTransform(Origin);
+	Save->bMotionParallaxState = bGameMotionParallax;
+	Save->bHasFixedGameViewpoint = bHasFixedViewpoint;
+	Save->FixedGameViewpointRelative = FixedViewpointRelative;
+	return UGameplayStatics::SaveGameToSlot(Save, GetPCLayoutSaveSlot(), 0);
+}
+
+bool AHUICRSyncPCManagerBase::LoadCommittedCalibration(FHUICRSyncCalibrationLayout& Layout, bool& bGameMotionParallax)
+{
+	const FString Slot = GetPCLayoutSaveSlot();
+	if (!UGameplayStatics::DoesSaveGameExist(Slot, 0))
+	{
+		return false;
+	}
+	auto* Save = Cast<UHUICRSyncCalibrationSaveGame>(UGameplayStatics::LoadGameFromSlot(Slot, 0));
+	if (!Save)
+	{
+		return false;
+	}
+	bGameMotionParallax = Save->bMotionParallaxState;
+	FixedViewpointRelative = Save->FixedGameViewpointRelative;
+	bHasFixedViewpoint = Save->bHasFixedGameViewpoint;
+	const FTransform Origin = GetViewpointReference();
+	const bool bMatchingScreens = Save->PCLayoutScreens.Num() == PCScreenBindings.Num() &&
+		Save->PCLayoutScreens.ContainsByPredicate([](const FHUICRSyncScreenPayload& Screen) { return Screen.ScreenID == 0; }) &&
+		!Save->PCLayoutScreens.ContainsByPredicate([this](const FHUICRSyncScreenPayload& Screen)
+		{
+			return !FindPCScreenBinding(Screen.ScreenID) || !Screen.Transform.IsValid();
+		});
+	if (Save->PCLayoutId.IsValid() && bMatchingScreens)
+	{
+		Layout.Version = Save->PCLayoutVersion;
+		Layout.Id = Save->PCLayoutId;
+		Layout.Screens = Save->PCLayoutScreens;
+		Layout.MainReference = Save->PCMainReference * Origin;
+		for (FHUICRSyncScreenPayload& Screen : Layout.Screens)
+		{
+			Screen.Transform = Screen.Transform * Origin;
+			Screen.InitialTransform = Screen.InitialTransform * Origin;
+		}
+		RestoreCalibrationLayout(Layout);
+		const FHUICRSyncPCScreenBinding* Main = FindPCScreenBinding(0);
+		if (Main && IsValid(Main->ScreenComponent))
+		{
+			Layout.MainReference = GetMainCalibrationReference(*Main);
+		}
+	}
+	RestoreFixedGameViewpoint();
+	return Layout.Id.IsValid();
+}
+
+void AHUICRSyncPCManagerBase::ApplyGameMotionParallax(bool bEnabled, const FHUICRSyncCalibrationLayout& Layout)
+{
+	if (!bEnabled && bHasTrackedGameViewpoint)
+	{
+		FixedViewpointRelative = LastTrackedGameViewpoint.GetRelativeTransform(GetViewpointReference());
+		bHasFixedViewpoint = true;
+	}
+	ResetGameViewpointTracking();
+	if (!SaveCommittedCalibration(Layout, bEnabled))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("HUICRSync could not save the game viewpoint."));
+	}
+	if (!SyncSubsystem->bCalibrationState)
+	{
+		RestoreFixedGameViewpoint();
+	}
+}
+
+void AHUICRSyncPCManagerBase::ResetGameViewpointTracking()
+{
+	bHasTrackedGameViewpoint = false;
+}
+
+bool AHUICRSyncPCManagerBase::RestoreFixedGameViewpoint()
+{
+	if (DefaultViewportComponent && bHasFixedViewpoint)
+	{
+		DefaultViewportComponent->SetWorldTransform(FixedViewpointRelative * GetViewpointReference());
+		return true;
+	}
+	return SelectPCScreen(0) || RestoreDefaultViewport();
 }
 
 void AHUICRSyncPCManagerBase::OnSubsystemCalibrationStateChanged(bool bNewCalibrationState)
@@ -596,7 +828,10 @@ void AHUICRSyncPCManagerBase::PostEditChangeProperty(FPropertyChangedEvent& Prop
 
 void AHUICRSyncPCManagerBase::OnSubsystemSelectedScreenChanged(int32 ScreenID)
 {
-	SelectPCScreen(ScreenID);
+	if (!SyncSubsystem->UsesManagedCalibration())
+	{
+		SelectPCScreen(ScreenID);
+	}
 }
 
 void AHUICRSyncPCManagerBase::OnSubsystemCommandReceived(const FString& Address, const TArray<FHUICRSyncCommandArg>& Args)
@@ -613,7 +848,7 @@ void AHUICRSyncPCManagerBase::OnSubsystemCommandReceived(const FString& Address,
 	const bool bIsCalibrationReferenceApplied =
 		Address.Equals(TEXT("/FromHMD/Calibration/ReferenceApplied"), ESearchCase::IgnoreCase) ||
 		Address.Equals(TEXT("FromHMD/Calibration/ReferenceApplied"), ESearchCase::IgnoreCase);
-	if (bIsCalibrationReferenceApplied)
+	if (bIsCalibrationReferenceApplied && bWaitingForHMDCalibrationReferenceAck)
 	{
 		CompleteCalibrationAfterHMDReferenceAck();
 		return;

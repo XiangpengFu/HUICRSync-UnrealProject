@@ -3,6 +3,8 @@
 #include "Common/UdpSocketBuilder.h"
 #include "Engine/World.h"
 #include "HUICRSyncActor.h"
+#include "HUICRSyncHMDManagerBase.h"
+#include "HUICRSyncPCManagerBase.h"
 #include "HUICRSyncPayloadLibrary.h"
 #include "IPAddress.h"
 #include "Kismet/GameplayStatics.h"
@@ -13,8 +15,31 @@
 
 namespace HUICRSyncProtocol
 {
+	static constexpr uint32 SessionMagic = 0x48555332; // HUS2
+	static constexpr uint32 PresenceMagic = 0x48555032;
+	static constexpr uint32 LeaveMagic = 0x48554C32;
+	static constexpr uint32 HeadPoseMagic = 0x48554832;
+	static constexpr int32 ProtocolVersion = 11;
+
+	static FHUICRSyncCommandArg IntArg(int32 Value)
+	{
+		FHUICRSyncCommandArg Arg;
+		Arg.Type = EHUICRSyncCommandArgType::Int32;
+		Arg.IntValue = Value;
+		return Arg;
+	}
+
+	static FHUICRSyncCommandArg StringArg(const FString& Value)
+	{
+		FHUICRSyncCommandArg Arg;
+		Arg.Type = EHUICRSyncCommandArgType::String;
+		Arg.StringValue = Value;
+		return Arg;
+	}
+
 	static constexpr uint32 RealtimeMagic = 0x48554952; // HUIR
 	static constexpr uint32 SpawnMagic = 0x48554950; // HUIP
+	static constexpr uint32 ManagedRealtimeMagic = 0x4855494D; // HUIM
 	static constexpr uint32 CommandMagic = 0x48554943; // HUIC
 	static constexpr uint32 CommandAckMagic = 0x48554941; // HUIA
 	static constexpr uint32 PCCommandIdPrefix = 0x10000000;
@@ -39,7 +64,7 @@ UHUICRSyncSubsystem::UHUICRSyncSubsystem()
 void UHUICRSyncSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
-	LocalSessionId = FGuid::NewGuid().ToString();
+	ResetLocalSession();
 	LocalIpAddress = ResolveLocalIpAddress();
 }
 
@@ -53,13 +78,16 @@ void UHUICRSyncSubsystem::Tick(float DeltaTime)
 {
 	ReceiveData();
 
-	if (!bGameStopped)
+	if (!bGameStopped && bConnectionState && (Role == EHUICRSyncRole::PC || bIsLocalHMDHost))
 	{
 		OnPrepareNetDataSend.Broadcast();
 		SendAllQueuedStates();
 	}
 
 	TickReliableCommands();
+	TickPresence();
+	TickCalibration();
+	TickManagedScene();
 }
 
 TStatId UHUICRSyncSubsystem::GetStatId() const
@@ -74,9 +102,20 @@ bool UHUICRSyncSubsystem::IsTickable() const
 
 bool UHUICRSyncSubsystem::ConfigureSync(EHUICRSyncRole InRole, int32 InLocalSyncPort, int32 InRemoteSyncPort, const FString& InRemoteIpAddress)
 {
+	if (InLocalSyncPort <= 0 || InLocalSyncPort >= 65535 ||
+		(!InRemoteIpAddress.IsEmpty() && (InRemoteSyncPort <= 0 || InRemoteSyncPort >= 65535)))
+	{
+		return false;
+	}
+	if (ReceiverSocket && (InLocalSyncPort != LocalSyncPort || InRole != Role ||
+		(InRole == EHUICRSyncRole::HMD && (RemoteIpAddress != InRemoteIpAddress || RemoteSyncPort != InRemoteSyncPort))))
+	{
+		StopSync();
+	}
+
 	if (LocalSessionId.IsEmpty())
 	{
-		LocalSessionId = FGuid::NewGuid().ToString();
+		ResetLocalSession();
 	}
 
 	Role = InRole;
@@ -87,7 +126,7 @@ bool UHUICRSyncSubsystem::ConfigureSync(EHUICRSyncRole InRole, int32 InLocalSync
 	InitialReliableCommandSendCount = Role == EHUICRSyncRole::HMD ? 3 : 1;
 	LocalIpAddress = ResolveLocalIpAddress();
 
-	const bool bReceiverReady = InitializeReceiverSocket();
+	const bool bReceiverReady = ReceiverSocket || InitializeReceiverSocket();
 	bool bSenderReady = true;
 
 	if (!RemoteIpAddress.IsEmpty())
@@ -131,25 +170,36 @@ bool UHUICRSyncSubsystem::InitializeReceiverSocket()
 	return ReceiverSocket != nullptr;
 }
 
-bool UHUICRSyncSubsystem::InitializeSenderSocket(const FString& InRemoteIpAddress, int32 InRemoteSyncPort)
+bool UHUICRSyncSubsystem::EnsureSenderSocket()
 {
 	if (!SenderSocket)
 	{
+		FIPv4Address LocalAddress;
+		if (!FIPv4Address::Parse(LocalIpAddress.IsEmpty() ? ResolveLocalIpAddress() : LocalIpAddress, LocalAddress))
+		{
+			return false;
+		}
+		// The reply must leave through the address the headset actually connected to on a multi-NIC PC.
 		SenderSocket = FUdpSocketBuilder(TEXT("HUICRSync_UDP_Sender"))
 			.AsReusable()
+			.BoundToEndpoint(FIPv4Endpoint(LocalAddress, 0))
 			.WithBroadcast()
 			.WithSendBufferSize(2 * 1024 * 1024);
 	}
 
-	if (!SenderSocket)
+	return SenderSocket != nullptr;
+}
+
+bool UHUICRSyncSubsystem::InitializeSenderSocket(const FString& InRemoteIpAddress, int32 InRemoteSyncPort)
+{
+	if (!EnsureSenderSocket())
 	{
 		return false;
 	}
-
 	RemoteIpAddress = InRemoteIpAddress;
 	RemoteSyncPort = InRemoteSyncPort;
 
-	const FString PeerId = RegisterOrUpdatePeer(DefaultPeerId, Role == EHUICRSyncRole::PC ? EHUICRSyncRole::HMD : EHUICRSyncRole::PC, RemoteIpAddress, RemoteSyncPort);
+	const FString PeerId = RegisterOrUpdatePeer(FString(), Role == EHUICRSyncRole::PC ? EHUICRSyncRole::HMD : EHUICRSyncRole::PC, RemoteIpAddress, RemoteSyncPort);
 	FHUICRSyncPeerRuntimeState* Peer = FindPeer(PeerId);
 	return Peer && Peer->UDPAddr.IsValid();
 }
@@ -171,104 +221,194 @@ void UHUICRSyncSubsystem::ReceiveData()
 	TArray<uint8> Data;
 	uint32 Size = 0;
 
-	while (ReceiverSocket->HasPendingData(Size))
+	while (ReceiverSocket && ReceiverSocket->HasPendingData(Size))
 	{
 		Data.SetNumUninitialized(static_cast<int32>(FMath::Min(Size, 65507u)));
 
 		int32 BytesRead = 0;
-		FIPv4Endpoint Sender;
-		const bool bReceived = ReceiverSocket->RecvFrom(Data.GetData(), Data.Num(), BytesRead, Sender.ToInternetAddr().Get());
+		const TSharedRef<FInternetAddr> SourceAddr = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->CreateInternetAddr();
+		const bool bReceived = ReceiverSocket->RecvFrom(Data.GetData(), Data.Num(), BytesRead, *SourceAddr);
 
 		if (!bReceived || BytesRead <= 0)
 		{
 			continue;
 		}
 
+		const FIPv4Endpoint Sender(SourceAddr);
 		Data.SetNum(BytesRead);
 		FMemoryReader Reader(Data, true);
 
 		uint32 Magic = 0;
 		Reader << Magic;
 
+		FHUICRSyncPeerRuntimeState* Peer = nullptr;
+		if (Magic == HUICRSyncProtocol::SessionMagic)
+		{
+			FGuid SourceSession, TargetSession;
+			Reader << SourceSession << TargetSession << Magic;
+			Peer = FindPeerByEndpoint(Sender);
+			if (Reader.IsError() || !Peer || Peer->RemoteSession != SourceSession || TargetSession != LocalSession)
+			{
+				continue;
+			}
+			Peer->Info.LastReceiveTime = FPlatformTime::Seconds();
+			if (FHUICRSyncPeerInfo* Snapshot = PeerInfos.Find(Peer->Info.PeerId))
+			{
+				Snapshot->LastReceiveTime = Peer->Info.LastReceiveTime;
+			}
+		}
+		else if (Magic != HUICRSyncProtocol::CommandMagic)
+		{
+			continue;
+		}
+
+		if (Magic == HUICRSyncProtocol::LeaveMagic)
+		{
+			const FString DepartingId = Peer->Info.PeerId;
+			RemoveParticipant(DepartingId);
+			continue;
+		}
+		if (Magic == HUICRSyncProtocol::PresenceMagic)
+		{
+			if (Role == EHUICRSyncRole::HMD)
+			{
+				int32 Revision = 0;
+				int32 Count = 0;
+				Reader << Revision << Count;
+				if (!Reader.IsError() && Count > 0 && static_cast<int64>(Count) * 4 < Reader.TotalSize() - Reader.Tell())
+				{
+					TArray<int32> Participants;
+					Participants.SetNumUninitialized(Count);
+					for (int32& Id : Participants)
+					{
+						Reader << Id;
+					}
+					ApplyHMDRoster(Revision, Participants);
+					ReadCalibrationStatus(Reader);
+				}
+			}
+			continue;
+		}
+		if (Magic == HUICRSyncProtocol::HeadPoseMagic)
+		{
+			uint32 Sequence = 0;
+			FTransform Pose;
+			Reader << Sequence << Pose;
+			if (Role == EHUICRSyncRole::PC && !Reader.IsError() && Pose.IsValid() &&
+				static_cast<int32>(Sequence - Peer->LastPoseSequence) > 0)
+			{
+				if (!Peer->Info.bHasHeadPose)
+				{
+					UE_LOG(LogTemp, Log, TEXT("HUICRSync first head pose: participant %d, PC position (cm) %s"),
+						Peer->Info.ParticipantId, *Pose.GetLocation().ToString());
+				}
+				Peer->LastPoseSequence = Sequence;
+				Peer->Info.bHasHeadPose = true;
+				Peer->Info.HeadPoseInPCSpace = Pose;
+				PeerInfos.Add(Peer->Info.PeerId, Peer->Info);
+			}
+			continue;
+		}
 		if (Magic == HUICRSyncProtocol::CommandAckMagic)
 		{
 			uint32 AckCommandId = 0;
 			Reader << AckCommandId;
-			if (FHUICRSyncPeerRuntimeState* Peer = FindPeerByEndpoint(Sender))
+			if (!Reader.IsError())
 			{
 				Peer->PendingReliableCommands.Remove(AckCommandId);
-				Peer->Info.LastReceiveTime = FPlatformTime::Seconds();
-				RefreshPeerInfoSnapshot();
 			}
 			continue;
 		}
-
 		if (Magic == HUICRSyncProtocol::CommandMagic)
 		{
 			uint32 CommandId = 0;
 			FHUICRSyncCommandPayload CommandPayload;
-
-			Reader << CommandId;
-			Reader << CommandPayload;
-
+			Reader << CommandId << CommandPayload;
 			if (Reader.IsError())
 			{
-				UE_LOG(LogTemp, Error, TEXT("HUICRSync command deserialize error."));
 				continue;
 			}
-
-			bReceivedAnyData = true;
-			FHUICRSyncPeerRuntimeState* Peer = FindPeerByEndpoint(Sender);
-			if (!Peer)
+			const bool bHandshake = HUICRSyncProtocol::IsConnectionHandshakeAddress(CommandPayload.Address);
+			if (bHandshake && Peer)
 			{
-				const FString SenderIp = Sender.Address.ToString();
-				const int32 SenderSyncPort = FMath::Max(0, Sender.Port - 1);
-				const FString PeerId = RegisterOrUpdatePeer(TEXT(""), EHUICRSyncRole::None, SenderIp, SenderSyncPort);
-				Peer = FindPeer(PeerId);
+				continue;
 			}
-
+			if (bHandshake)
+			{
+				Peer = AcceptHandshake(Sender, CommandPayload);
+			}
 			if (!Peer)
 			{
 				continue;
 			}
-
-			if (HUICRSyncProtocol::IsConnectionHandshakeAddress(CommandPayload.Address) &&
-				CommandPayload.Args.Num() >= 3 &&
-				CommandPayload.Args[2].Type == EHUICRSyncCommandArgType::String)
-			{
-				const FString& IncomingSessionId = CommandPayload.Args[2].StringValue;
-				if (!IncomingSessionId.IsEmpty() && Peer->RemoteSessionId != IncomingSessionId)
-				{
-					const bool bHadPreviousSession = !Peer->RemoteSessionId.IsEmpty();
-					Peer->PendingReliableCommands.Empty();
-					Peer->ReceivedCommandIds.Empty();
-					Peer->RemoteSessionId = IncomingSessionId;
-
-					if (bHadPreviousSession)
-					{
-						UE_LOG(LogTemp, Log, TEXT("HUICRSync detected a restarted peer. Peer=%s Session=%s"),
-							*Peer->Info.PeerId, *IncomingSessionId);
-					}
-				}
-			}
-
-			Peer->Info.LastReceiveTime = FPlatformTime::Seconds();
 			SendCommandAck(*Peer, CommandId);
-
 			if (Peer->ReceivedCommandIds.Contains(CommandId))
 			{
 				continue;
 			}
-
 			Peer->ReceivedCommandIds.Add(CommandId);
-			RefreshPeerInfoSnapshot();
+			Peer->Info.LastReceiveTime = FPlatformTime::Seconds();
+			if (!bHandshake && HandleCalibrationCommand(*Peer, CommandPayload))
+			{
+				continue;
+			}
+			if (!bHandshake && HandleManagedSceneCommand(*Peer, CommandPayload))
+			{
+				continue;
+			}
+			if (!bHandshake && Role == EHUICRSyncRole::PC && Peer->Info.ParticipantId != HostParticipantId)
+			{
+				// Existing single-user Blueprint commands affect shared state.
+				continue;
+			}
+			if (bManagedCalibration && Role == EHUICRSyncRole::PC && !bHandshake)
+			{
+				const FString Address = CommandPayload.Address.StartsWith(TEXT("/")) ?
+					CommandPayload.Address.Mid(1) : CommandPayload.Address;
+				if (Address.StartsWith(TEXT("FromHMD/Calibration/")) || Address.Equals(TEXT("SelectScreen"), ESearchCase::IgnoreCase))
+				{
+					continue;
+				}
+				if (Address.Equals(TEXT("FromHMD/MotionParallaxState"), ESearchCase::IgnoreCase))
+				{
+					if (!CommandPayload.Args.IsEmpty() && CommandPayload.Args[0].Type == EHUICRSyncCommandArgType::Bool)
+					{
+						HandleManagedParallax(CommandPayload.Args[0].BoolValue);
+					}
+					continue;
+				}
+				if (bCalibrationPaused && !Address.Equals(TEXT("FromHMD/SyncSpawnReady"), ESearchCase::IgnoreCase) &&
+					!Address.Equals(TEXT("FromHMD/HMDSyncReady"), ESearchCase::IgnoreCase))
+				{
+					continue;
+				}
+			}
+			if (!bHandshake)
+			{
+				bReceivedAnyData = true;
+			}
+			const FString CommandPeerId = Peer->Info.PeerId;
 			HandleCommandPayload(*Peer, CommandPayload);
-			OnCommandReceived.Broadcast(CommandPayload.Address, CommandPayload.Args);
+			if (Role != EHUICRSyncRole::PC || CommandPeerId == DefaultPeerId)
+			{
+				OnCommandReceived.Broadcast(CommandPayload.Address, CommandPayload.Args);
+			}
+			continue;
+		}
+		// Until queued calibration and multiplayer gameplay ship, only the Host drives the
+		// existing single-user gameplay path. All registered headsets publish independent head poses.
+		if (Role == EHUICRSyncRole::PC && Peer->Info.ParticipantId != HostParticipantId)
+		{
 			continue;
 		}
 
 		int32 NumEntries = 0;
-		if (Magic == HUICRSyncProtocol::RealtimeMagic)
+		uint64 StateSequence = 0;
+		if (Magic == HUICRSyncProtocol::ManagedRealtimeMagic && Role == EHUICRSyncRole::HMD && bManagedCalibration)
+		{
+			Reader << StateSequence << NumEntries;
+		}
+		else if (Magic == HUICRSyncProtocol::RealtimeMagic)
 		{
 			Reader << NumEntries;
 		}
@@ -300,13 +440,36 @@ void UHUICRSyncSubsystem::ReceiveData()
 				break;
 			}
 
+			if (bManagedCalibration &&
+				(ReceivedEntry.TypeCode == EHUICRSyncActorType::HUIScreen || ReceivedEntry.TypeCode == EHUICRSyncActorType::HUICalibrator ||
+					(bCalibrationPaused && !(Role == EHUICRSyncRole::HMD && Magic == HUICRSyncProtocol::ManagedRealtimeMagic))))
+			{
+				continue;
+			}
 			bReceivedAnyData = true;
 
 			if (ReceivedEntry.TypeCode == EHUICRSyncActorType::HUISpawnInGame)
 			{
+				if (bManagedCalibration)
+				{
+					continue;
+				}
 				SpawnActorPackets.Add(ReceivedEntry);
 				bReceivedSpawnData = true;
 				continue;
+			}
+			if (StateSequence > 0 && ReceivedEntry.TypeCode == EHUICRSyncActorType::HUIActor)
+			{
+				if (RemovedSceneActorIds.Contains(ReceivedEntry.ActorID))
+				{
+					continue;
+				}
+				FManagedActorState& Latest = ReceivedManagedActorStates.FindOrAdd(ReceivedEntry.ActorID);
+				if (StateSequence <= Latest.Sequence)
+				{
+					continue;
+				}
+				Latest = { ReceivedEntry, StateSequence };
 			}
 
 			ReceivedDataMap.FindOrAdd(ReceivedEntry.TypeCode).InnerMap.Add(ReceivedEntry.ActorID, ReceivedEntry);
@@ -318,7 +481,7 @@ void UHUICRSyncSubsystem::ReceiveData()
 		OnNetDataReceived.Broadcast();
 	}
 
-	if (bReceivedSpawnData)
+	if (bReceivedSpawnData && !SpawnActorPackets.IsEmpty())
 	{
 		ProcessSpawnActorPackets();
 		OnSpawnDataReceived.Broadcast();
@@ -342,6 +505,12 @@ void UHUICRSyncSubsystem::QueueScreenNetEntry(const FHUICRSyncNetEntry& Entry)
 
 void UHUICRSyncSubsystem::SendAllQueuedStates()
 {
+	if (Role == EHUICRSyncRole::HMD && bConnectionState && !bIsLocalHMDHost)
+	{
+		RegisteredStates.Reset();
+		ScreenRegisteredStates.Reset();
+		return;
+	}
 	FHUICRSyncPeerRuntimeState* Peer = FindDefaultPeer();
 	if (!SenderSocket || !Peer || !Peer->UDPAddr.IsValid())
 	{
@@ -376,7 +545,43 @@ void UHUICRSyncSubsystem::SendAllQueuedStates()
 	RegisteredStates.Empty();
 	ScreenRegisteredStates.Empty();
 
-	SendQueuedEntries(*Peer, RealtimeEntries, HUICRSyncProtocol::RealtimeMagic);
+	if (Role == EHUICRSyncRole::PC && bManagedCalibration)
+	{
+		const uint64 StateSequence = ++ManagedStateSequence;
+		for (const auto& Entry : RealtimeEntries)
+		{
+			if (Entry.TypeCode == EHUICRSyncActorType::HUIActor)
+			{
+				const FString Key = MakeActorKey(Entry.TypeCode, Entry.ActorID);
+				if (ManagedSceneActors.Contains(Key))
+				{
+					LatestManagedActorStates.Add(Key, { Entry, StateSequence });
+				}
+			}
+		}
+		for (auto& Pair : Peers)
+		{
+			if (Pair.Value.Info.bConnected && Pair.Value.bHasCalibrated)
+			{
+				TArray<FHUICRSyncNetEntry> VisibleEntries;
+				VisibleEntries.Reserve(RealtimeEntries.Num());
+				for (const auto& Entry : RealtimeEntries)
+				{
+					const FManagedSceneActor* SceneActor = ManagedSceneActors.Find(MakeActorKey(Entry.TypeCode, Entry.ActorID));
+					if (Entry.TypeCode != EHUICRSyncActorType::HUIActor ||
+						(SceneActor && SceneActor->ExcludedParticipantId != Pair.Value.Info.ParticipantId))
+					{
+						VisibleEntries.Add(Entry);
+					}
+				}
+				SendQueuedEntries(Pair.Value, VisibleEntries, HUICRSyncProtocol::ManagedRealtimeMagic, StateSequence);
+			}
+		}
+	}
+	else
+	{
+		SendQueuedEntries(*Peer, RealtimeEntries, HUICRSyncProtocol::RealtimeMagic);
+	}
 
 	if (!SpawnEntries.IsEmpty())
 	{
@@ -395,6 +600,7 @@ void UHUICRSyncSubsystem::SendAllQueuedStates()
 		bool bLastPacket = false;
 		int32 NumEntries = 0;
 
+		WriteSessionHeader(Writer, *Peer);
 		Writer << Magic;
 		Writer << BatchId;
 		Writer << PacketIndex;
@@ -404,6 +610,7 @@ void UHUICRSyncSubsystem::SendAllQueuedStates()
 
 		const int64 NumEntriesPos = Writer.Tell();
 		Writer << NumEntries;
+		const int64 HeaderBytes = Writer.Tell();
 
 		int32 TestIndex = PendingSpawnSendIndex;
 		while (TestIndex < PendingSpawnPackets.Num())
@@ -413,7 +620,7 @@ void UHUICRSyncSubsystem::SendAllQueuedStates()
 			FHUICRSyncNetEntry Entry = PendingSpawnPackets[TestIndex];
 			EntryWriter << Entry;
 
-			if (EntryBytes.Num() > MaxPacketBytes)
+			if (HeaderBytes + EntryBytes.Num() > MaxPacketBytes)
 			{
 				UE_LOG(LogTemp, Error, TEXT("HUICRSync spawn entry too large. Size=%d ActorID=%d Address=%s"), EntryBytes.Num(), Entry.ActorID, *Entry.Address);
 				TestIndex++;
@@ -467,6 +674,11 @@ void UHUICRSyncSubsystem::SendAllQueuedStates()
 
 bool UHUICRSyncSubsystem::QueueSpawnRequest(UClass* SpawnClass, const FTransform& SpawnTransform, bool bSpawnBackOnSender)
 {
+	if (Role == EHUICRSyncRole::HMD && bManagedCalibration)
+	{
+		return RequestSpawnSyncActor(SpawnClass, SpawnTransform, {}, bSpawnBackOnSender);
+	}
+
 	UClass* LocalSpawnClass = nullptr;
 	UClass* RemoteSpawnClass = nullptr;
 	if (!ResolveSpawnClasses(SpawnClass, LocalSpawnClass, RemoteSpawnClass))
@@ -492,6 +704,11 @@ bool UHUICRSyncSubsystem::QueueSpawnMirror(UClass* SpawnClass, int32 ActorID, co
 	if (!SpawnClass || !SpawnClass->IsChildOf(AHUICRSyncActor::StaticClass()))
 	{
 		return false;
+	}
+	if (Role == EHUICRSyncRole::PC && bManagedCalibration)
+	{
+		const auto ActorType = SpawnClass->GetDefaultObject<AHUICRSyncActor>()->TypeCode;
+		return bSpawningManagedActor || RegisterManagedSceneMirror(FindSyncActor(ActorType, ActorID), SpawnClass, InitPayloadBytes);
 	}
 
 	FHUICRSyncNetEntry Entry;
@@ -520,11 +737,21 @@ bool UHUICRSyncSubsystem::RequestSpawnSyncActor(UClass* SpawnClass, const FTrans
 	Entry.TypeCode = EHUICRSyncActorType::HUISpawnInGame;
 	Entry.ActorID = -1;
 	UHUICRSyncPayloadLibrary::WriteSpawnRequestPayload(Entry.PayloadBytes, RemoteSpawnClass, SpawnTransform, bSpawnBackOnRequester, InitPayloadBytes);
+	if (Role == EHUICRSyncRole::HMD && bManagedCalibration)
+	{
+		return SendManagedSpawnRequest(Entry.PayloadBytes);
+	}
 	RegisteredStates.Add(Entry);
 	return !Entry.PayloadBytes.IsEmpty();
 }
 
 AHUICRSyncActor* UHUICRSyncSubsystem::SpawnSyncActorAsAuthority(UClass* SpawnClass, const FTransform& SpawnTransform, const TArray<uint8>& InitPayloadBytes, bool bSpawnOnPeer)
+{
+	return SpawnSyncActorForPeers(SpawnClass, SpawnTransform, InitPayloadBytes, bSpawnOnPeer, 0);
+}
+
+AHUICRSyncActor* UHUICRSyncSubsystem::SpawnSyncActorForPeers(UClass* SpawnClass, const FTransform& SpawnTransform,
+	const TArray<uint8>& InitPayloadBytes, bool bSpawnOnPeer, int32 ExcludedParticipantId)
 {
 	if (Role != EHUICRSyncRole::PC)
 	{
@@ -545,11 +772,33 @@ AHUICRSyncActor* UHUICRSyncSubsystem::SpawnSyncActorAsAuthority(UClass* SpawnCla
 
 	const AHUICRSyncActor* DefaultSyncActor = LocalSpawnClass->GetDefaultObject<AHUICRSyncActor>();
 	const EHUICRSyncActorType ActorType = DefaultSyncActor ? DefaultSyncActor->TypeCode : EHUICRSyncActorType::HUIActor;
+	if (bManagedCalibration && (ActorType != EHUICRSyncActorType::HUIActor || !SpawnTransform.IsValid() ||
+		(bSpawnOnPeer && (!RemoteSpawnClass || RemoteSpawnClass->GetDefaultObject<AHUICRSyncActor>()->TypeCode != ActorType))))
+	{
+		return nullptr;
+	}
 	const int32 NewActorID = AllocateActorID(ActorType);
+	TGuardValue<bool> SpawningActor(bSpawningManagedActor, bManagedCalibration);
 	AHUICRSyncActor* NewActor = SpawnSyncActorInternal(LocalSpawnClass, NewActorID, SpawnTransform, InitPayloadBytes);
 	if (!IsValid(NewActor))
 	{
 		return nullptr;
+	}
+	if (bManagedCalibration)
+	{
+		if (bSpawnOnPeer)
+		{
+			const TArray<uint8>& InitialPayload = !InitPayloadBytes.IsEmpty() ? InitPayloadBytes : NewActor->ActorInitPayloadData;
+			if (RegisterManagedSceneMirror(NewActor, RemoteSpawnClass, InitialPayload, ExcludedParticipantId))
+			{
+				ManagedSceneActors.FindChecked(MakeActorKey(ActorType, NewActorID)).bSpawnedAtRuntime = true;
+			}
+		}
+		else
+		{
+			LocalOnlySceneActors.Add(MakeActorKey(ActorType, NewActorID));
+		}
+		return NewActor;
 	}
 
 	if (bSpawnOnPeer)
@@ -590,6 +839,13 @@ bool UHUICRSyncSubsystem::SpawnSyncActorSimple(UClass* SpawnClass, const FTransf
 	return SpawnSyncActor(SpawnClass, SpawnTransform, {});
 }
 
+bool UHUICRSyncSubsystem::SpawnSyncActorFromLocalSpace(UClass* SpawnClass, const FTransform& SpawnTransform,
+	const TArray<uint8>& InitPayloadBytes)
+{
+	return SpawnSyncActor(SpawnClass, Role == EHUICRSyncRole::HMD ? ConvertHMDActorTransformToPC(SpawnTransform) : SpawnTransform,
+		InitPayloadBytes);
+}
+
 int32 UHUICRSyncSubsystem::StartInitialSpawnSync()
 {
 	if (Role != EHUICRSyncRole::PC)
@@ -597,6 +853,24 @@ int32 UHUICRSyncSubsystem::StartInitialSpawnSync()
 		return 0;
 	}
 
+	if (bManagedCalibration)
+	{
+		PrepareManagedScene();
+		if (bHasStartedGame)
+		{
+			for (auto& Pair : Peers)
+			{
+				if (Pair.Value.Info.bConnected && Pair.Value.bHasCalibrated &&
+					!CalibrationTurns.Contains(Pair.Value.Info.ParticipantId))
+				{
+					StartManagedSceneForPeer(Pair.Value);
+				}
+			}
+			PublishCalibrationStatus();
+		}
+		TickManagedScene();
+		return ManagedSceneActors.Num();
+	}
 	bWaitingForInitialSpawnSync = true;
 	SendReliableCommand(TEXT("/FromPC/SyncSpawnBegin"), {});
 
@@ -662,6 +936,10 @@ void UHUICRSyncSubsystem::UnregisterSyncActor(AHUICRSyncActor* SyncActor)
 	if (SpawnedSyncActors.FindRef(ActorKey) == SyncActor)
 	{
 		SpawnedSyncActors.Remove(ActorKey);
+		if (Role == EHUICRSyncRole::PC && bManagedCalibration)
+		{
+			UnregisterManagedSceneMirror(*SyncActor);
+		}
 	}
 }
 
@@ -688,12 +966,20 @@ bool UHUICRSyncSubsystem::DestroySyncActor(EHUICRSyncActorType TypeCode, int32 A
 	if (Role == EHUICRSyncRole::PC)
 	{
 		const bool bDestroyedLocalActor = DestroyLocalSyncActor(TypeCode, ActorID);
+		if (bManagedCalibration)
+		{
+			return bDestroyedLocalActor;
+		}
 		const bool bSentDestroyCommand = SendReliableCommand(TEXT("/FromPC/DestroySyncActor"), { TypeArg, ActorIdArg });
 		return bDestroyedLocalActor || bSentDestroyCommand;
 	}
 
 	if (Role == EHUICRSyncRole::HMD)
 	{
+		if (bManagedCalibration)
+		{
+			return SendManagedDestroyRequest(TypeCode, ActorID);
+		}
 		return SendReliableCommand(TEXT("/FromHMD/DestroySyncActorRequest"), { TypeArg, ActorIdArg });
 	}
 
@@ -713,6 +999,10 @@ int32 UHUICRSyncSubsystem::ClearLocalSyncActors()
 		{
 			ActorsToDestroy.Add(SyncActor);
 			ClearedTypes.Add(SyncActor->TypeCode);
+			if (Role == EHUICRSyncRole::PC && bManagedCalibration)
+			{
+				UnregisterManagedSceneMirror(*SyncActor);
+			}
 		}
 	}
 
@@ -720,7 +1010,10 @@ int32 UHUICRSyncSubsystem::ClearLocalSyncActors()
 	for (const EHUICRSyncActorType TypeCode : ClearedTypes)
 	{
 		ReceivedDataMap.Remove(TypeCode);
-		ActorIdCounters.Remove(TypeCode);
+		if (!bManagedCalibration)
+		{
+			ActorIdCounters.Remove(TypeCode);
+		}
 	}
 
 	RegisteredStates.RemoveAll([&ClearedTypes](const FHUICRSyncNetEntry& Entry)
@@ -786,6 +1079,13 @@ bool UHUICRSyncSubsystem::SendReliableCommandString(const FString& Address, cons
 
 bool UHUICRSyncSubsystem::SendReliableCommandToPeer(const FString& PeerId, const FString& Address, const TArray<FHUICRSyncCommandArg>& Args)
 {
+	const bool bParticipantCommand = Address.StartsWith(TEXT("/HUICRSync/Calibration/"), ESearchCase::CaseSensitive) ||
+		Address.StartsWith(TEXT("/HUICRSync/Scene/"), ESearchCase::CaseSensitive);
+	if (!HUICRSyncProtocol::IsConnectionHandshakeAddress(Address) &&
+		(!bConnectionState || (Role == EHUICRSyncRole::HMD && !bIsLocalHMDHost && !bParticipantCommand)))
+	{
+		return false;
+	}
 	FHUICRSyncPeerRuntimeState* Peer = PeerId.IsEmpty() ? FindDefaultPeer() : FindPeer(PeerId);
 	if (!SenderSocket || !Peer || !Peer->UDPAddr.IsValid())
 	{
@@ -804,6 +1104,10 @@ bool UHUICRSyncSubsystem::SendReliableCommandToPeer(const FString& PeerId, const
 	Pending.CommandId = CommandId;
 	Pending.Address = Address;
 	Pending.Args = Args;
+	if (Role == EHUICRSyncRole::HMD && HUICRSyncProtocol::IsConnectionHandshakeAddress(Address) && Pending.Args.Num() == 3)
+	{
+		Pending.Args.Add(HUICRSyncProtocol::IntArg(HUICRSyncProtocol::ProtocolVersion));
+	}
 	Pending.LastSendTime = FPlatformTime::Seconds();
 	Pending.RetryCount = 0;
 
@@ -813,7 +1117,7 @@ bool UHUICRSyncSubsystem::SendReliableCommandToPeer(const FString& PeerId, const
 	const int32 SendCount = FMath::Max(1, InitialReliableCommandSendCount);
 	for (int32 Index = 0; Index < SendCount; ++Index)
 	{
-		bAnySent |= SendReliableCommandPacket(*Peer, CommandId, Address, Args);
+		bAnySent |= SendReliableCommandPacket(*Peer, CommandId, Address, Pending.Args);
 	}
 
 	return bAnySent;
@@ -833,8 +1137,6 @@ FString UHUICRSyncSubsystem::RegisterOrUpdatePeer(const FString& PeerId, EHUICRS
 	Peer.Info.IpAddress = IpAddress;
 	Peer.Info.SyncPort = PeerSyncPort;
 	Peer.Info.UDPPort = PeerSyncPort + 1;
-	Peer.Info.bConnected = true;
-
 	BuildPeerUdpAddress(Peer);
 
 	if (DefaultPeerId.IsEmpty())
@@ -848,36 +1150,34 @@ FString UHUICRSyncSubsystem::RegisterOrUpdatePeer(const FString& PeerId, EHUICRS
 
 bool UHUICRSyncSubsystem::SetDefaultPeer(const FString& PeerId)
 {
-	if (!Peers.Contains(PeerId))
+	const FHUICRSyncPeerRuntimeState* Peer = FindPeer(PeerId);
+	if (!Peer || (Role == EHUICRSyncRole::PC && HostParticipantId != 0 &&
+		Peer->Info.ParticipantId != HostParticipantId))
 	{
 		return false;
 	}
 
 	DefaultPeerId = PeerId;
-	if (const FHUICRSyncPeerRuntimeState* Peer = FindPeer(PeerId))
-	{
-		RemoteIpAddress = Peer->Info.IpAddress;
-		RemoteSyncPort = Peer->Info.SyncPort;
-	}
+	RemoteIpAddress = Peer->Info.IpAddress;
+	RemoteSyncPort = Peer->Info.SyncPort;
 	return true;
 }
 
 void UHUICRSyncSubsystem::BeginConnectionAttempt()
 {
-	const bool bWasConnected = bConnectionState;
-	bConnectionState = false;
-
-	if (FHUICRSyncPeerRuntimeState* Peer = FindDefaultPeer())
+	FHUICRSyncPeerRuntimeState* Peer = FindDefaultPeer();
+	if (!Peer || bConnectionState)
 	{
-		Peer->Info.bConnected = false;
-		Peer->PendingReliableCommands.Empty();
+		return;
 	}
-
-	RefreshPeerInfoSnapshot();
-	if (bWasConnected)
+	for (const TPair<uint32, FHUICRSyncPendingCommand>& Command : Peer->PendingReliableCommands)
 	{
-		OnConnectionStateChanged.Broadcast(false);
+		if (HUICRSyncProtocol::IsConnectionHandshakeAddress(Command.Value.Address))
+		{
+			return;
+		}
 	}
+	ResetLocalSession();
 }
 
 TArray<FString> UHUICRSyncSubsystem::GetKnownPeerIds() const
@@ -905,18 +1205,44 @@ void UHUICRSyncSubsystem::ReserveActorID(EHUICRSyncActorType TypeCode, int32 Act
 
 void UHUICRSyncSubsystem::StopSync()
 {
+	for (const TPair<FString, FHUICRSyncPeerRuntimeState>& Pair : Peers)
+	{
+		if (Pair.Value.Info.bConnected)
+		{
+			SendPresence(Pair.Value, true);
+		}
+	}
 	DestroySockets();
 
+	ResetCalibrationSession();
 	Peers.Empty();
+	RetiredSessions.Reset();
+	ConnectedParticipantIds.Reset();
+	HostParticipantId = LocalParticipantId = ConnectedHMDCount = 0;
+	bIsLocalHMDHost = false;
+	RosterRevision = 0;
+	ResetLocalSession();
 	PeerInfos.Empty();
 	DefaultPeerId.Empty();
-	RegisteredStates.Empty();
-	ScreenRegisteredStates.Empty();
-	PendingSpawnPackets.Empty();
-	ReceivedDataMap.Empty();
-	SpawnActorPackets.Empty();
-	SpawnedSyncActors.Empty();
-	ActorIdCounters.Empty();
+	ClearSessionTraffic();
+	if (Role != EHUICRSyncRole::PC || !bManagedCalibration)
+	{
+		SpawnedSyncActors.Empty();
+		ActorIdCounters.Empty();
+	}
+	SetConnected(false);
+	OnParticipantsChanged.Broadcast();
+}
+
+void UHUICRSyncSubsystem::ClearSessionTraffic()
+{
+	RegisteredStates.Reset();
+	ScreenRegisteredStates.Reset();
+	PendingSpawnPackets.Reset();
+	PendingSpawnSendIndex = 0;
+	CurrentSpawnPacketIndex = 0;
+	ReceivedDataMap.Reset();
+	SpawnActorPackets.Reset();
 	bWaitingForInitialSpawnSync = false;
 }
 
@@ -927,7 +1253,12 @@ FTransform UHUICRSyncSubsystem::ConvertHMDTransformToPC(const FTransform& InHMDT
 
 FTransform UHUICRSyncSubsystem::ConvertPCTransformToHMD(const FTransform& InPCTransform) const
 {
-	return InPCTransform * PCToHMDTransform;
+	FTransform Mapping = PCToHMDTransform;
+	if (Role == EHUICRSyncRole::HMD && GuestActorMapping.IsValid())
+	{
+		Mapping.SetScale3D(FVector::OneVector);
+	}
+	return InPCTransform * Mapping;
 }
 
 FString UHUICRSyncSubsystem::ResolveLocalIpAddress() const
@@ -981,21 +1312,12 @@ FHUICRSyncPeerRuntimeState* UHUICRSyncSubsystem::FindPeerByEndpoint(const FIPv4E
 	for (TPair<FString, FHUICRSyncPeerRuntimeState>& Pair : Peers)
 	{
 		FHUICRSyncPeerRuntimeState& Peer = Pair.Value;
-		if (Peer.Info.IpAddress == SenderIp && Peer.Info.UDPPort == SenderUDPPort)
+		if (Peer.RemoteSession.IsValid() && Peer.Info.IpAddress == SenderIp && Peer.SenderPort == SenderUDPPort)
 		{
 			return &Peer;
 		}
 	}
-
-	for (TPair<FString, FHUICRSyncPeerRuntimeState>& Pair : Peers)
-	{
-		if (Pair.Value.Info.IpAddress == SenderIp)
-		{
-			return &Pair.Value;
-		}
-	}
-
-	return FindDefaultPeer();
+	return nullptr;
 }
 
 bool UHUICRSyncSubsystem::BuildPeerUdpAddress(FHUICRSyncPeerRuntimeState& Peer)
@@ -1051,6 +1373,10 @@ bool UHUICRSyncSubsystem::SendReliableCommandPacket(FHUICRSyncPeerRuntimeState& 
 	TArray<uint8> Buffer;
 	FMemoryWriter Writer(Buffer, true);
 	uint32 Magic = HUICRSyncProtocol::CommandMagic;
+	if (!HUICRSyncProtocol::IsConnectionHandshakeAddress(Address))
+	{
+		WriteSessionHeader(Writer, Peer);
+	}
 	Writer << Magic;
 	Writer << CommandId;
 	Writer << CommandPayload;
@@ -1077,6 +1403,7 @@ void UHUICRSyncSubsystem::SendCommandAck(FHUICRSyncPeerRuntimeState& Peer, uint3
 	TArray<uint8> Buffer;
 	FMemoryWriter Writer(Buffer, true);
 	uint32 Magic = HUICRSyncProtocol::CommandAckMagic;
+	WriteSessionHeader(Writer, Peer);
 	Writer << Magic;
 	Writer << CommandId;
 
@@ -1143,7 +1470,8 @@ void UHUICRSyncSubsystem::DestroySockets()
 	}
 }
 
-bool UHUICRSyncSubsystem::SendQueuedEntries(FHUICRSyncPeerRuntimeState& Peer, const TArray<FHUICRSyncNetEntry>& Entries, uint32 Magic)
+bool UHUICRSyncSubsystem::SendQueuedEntries(FHUICRSyncPeerRuntimeState& Peer, const TArray<FHUICRSyncNetEntry>& Entries, uint32 Magic,
+	uint64 StateSequence)
 {
 	if (Entries.IsEmpty() || !SenderSocket || !Peer.UDPAddr.IsValid())
 	{
@@ -1159,9 +1487,15 @@ bool UHUICRSyncSubsystem::SendQueuedEntries(FHUICRSyncPeerRuntimeState& Peer, co
 		FMemoryWriter Writer(Buffer, true);
 		int32 NumEntries = 0;
 
+		WriteSessionHeader(Writer, Peer);
 		Writer << Magic;
+		if (Magic == HUICRSyncProtocol::ManagedRealtimeMagic)
+		{
+			Writer << StateSequence;
+		}
 		const int64 NumEntriesPos = Writer.Tell();
 		Writer << NumEntries;
+		const int64 HeaderBytes = Writer.Tell();
 
 		while (RealtimeIndex < Entries.Num())
 		{
@@ -1170,7 +1504,7 @@ bool UHUICRSyncSubsystem::SendQueuedEntries(FHUICRSyncPeerRuntimeState& Peer, co
 			FHUICRSyncNetEntry Entry = Entries[RealtimeIndex];
 			EntryWriter << Entry;
 
-			if (EntryBytes.Num() > MaxPacketBytes)
+			if (HeaderBytes + EntryBytes.Num() > MaxPacketBytes)
 			{
 				UE_LOG(LogTemp, Error, TEXT("HUICRSync realtime entry too large. Size=%d Type=%d ActorID=%d Address=%s"), EntryBytes.Num(), static_cast<int32>(Entry.TypeCode), Entry.ActorID, *Entry.Address);
 				RealtimeIndex++;
@@ -1411,6 +1745,17 @@ AHUICRSyncActor* UHUICRSyncSubsystem::SpawnSyncActorInternal(UClass* SpawnClass,
 	}
 
 	UWorld* World = GetWorld();
+	if (!World && bManagedCalibration)
+	{
+		if (Role == EHUICRSyncRole::PC && CalibrationPC.IsValid())
+		{
+			World = CalibrationPC->GetWorld();
+		}
+		else if (Role == EHUICRSyncRole::HMD && CalibrationHMD.IsValid())
+		{
+			World = CalibrationHMD->GetWorld();
+		}
+	}
 	if (!World)
 	{
 		return nullptr;
@@ -1450,6 +1795,14 @@ void UHUICRSyncSubsystem::CompleteSyncSceneAsAuthority()
 
 void UHUICRSyncSubsystem::StartGameFromAuthority()
 {
+	if (bManagedCalibration)
+	{
+		bAwaitingFirstSpawn = false;
+		bInitialCalibrationSceneReady = true;
+		BeginManagedGameplay();
+		PublishCalibrationStatus();
+		return;
+	}
 	bGameStopped = false;
 	OnSyncSceneReady.Broadcast();
 	SendReliableCommand(TEXT("/FromPC/GameStart"), {});
@@ -1460,66 +1813,54 @@ void UHUICRSyncSubsystem::HandleCommandPayload(FHUICRSyncPeerRuntimeState& Peer,
 	const FString& Address = CommandPayload.Address;
 	const TArray<FHUICRSyncCommandArg>& Args = CommandPayload.Args;
 
-	if (Address.Equals(TEXT("FromHMD/HMDConnectionRequest"), ESearchCase::IgnoreCase) ||
-		Address.Equals(TEXT("/FromHMD/HMDConnectionRequest"), ESearchCase::IgnoreCase))
+	if (HUICRSyncProtocol::IsConnectionHandshakeAddress(Address))
 	{
-		if (Role != EHUICRSyncRole::PC || Args.Num() < 2 ||
-			Args[0].Type != EHUICRSyncCommandArgType::String ||
-			Args[1].Type != EHUICRSyncCommandArgType::Int32)
+		Peer.Info.bConnected = true;
+		if (Role == EHUICRSyncRole::PC)
 		{
-			return;
+			const bool bJoined = Peer.Info.ParticipantId == 0;
+			if (bJoined)
+			{
+				Peer.Info.ParticipantId = NextParticipantId++;
+				ConnectedParticipantIds.Add(Peer.Info.ParticipantId);
+				UE_LOG(LogTemp, Log, TEXT("HUICRSync participant %d joined (%s)"), Peer.Info.ParticipantId, *Peer.Info.PeerId);
+			}
+			const FString ReplyPeerId = Peer.Info.PeerId;
+			const FString Echo = Peer.RemoteSession.ToString();
+			const int32 ParticipantId = Peer.Info.ParticipantId;
+			if (bJoined)
+			{
+				UpdatePCParticipants();
+			}
+			TArray<FHUICRSyncCommandArg> Reply {
+				HUICRSyncProtocol::StringArg(LocalIpAddress), HUICRSyncProtocol::IntArg(LocalSyncPort),
+				HUICRSyncProtocol::StringArg(LocalSessionId), HUICRSyncProtocol::StringArg(Echo),
+				HUICRSyncProtocol::IntArg(ParticipantId), HUICRSyncProtocol::IntArg(RosterRevision)
+			};
+			for (int32 Id : ConnectedParticipantIds)
+			{
+				Reply.Add(HUICRSyncProtocol::IntArg(Id));
+			}
+			SendReliableCommandToPeer(ReplyPeerId, TEXT("FromPC/PCConnectionRequest"), Reply);
 		}
-
-		RemoteIpAddress = Args[0].StringValue;
-		RemoteSyncPort = Args[1].IntValue;
-		const FString PeerId = RegisterOrUpdatePeer(Peer.Info.PeerId, EHUICRSyncRole::HMD, RemoteIpAddress, RemoteSyncPort);
-		SetDefaultPeer(PeerId);
-		InitializeSenderSocket(RemoteIpAddress, RemoteSyncPort);
-
-		bConnectionState = true;
-		OnConnectionStateChanged.Broadcast(bConnectionState);
-
-		FHUICRSyncCommandArg IpArg;
-		IpArg.Type = EHUICRSyncCommandArgType::String;
-		IpArg.StringValue = ResolveLocalIpAddress();
-
-		FHUICRSyncCommandArg PortArg;
-		PortArg.Type = EHUICRSyncCommandArgType::Int32;
-		PortArg.IntValue = LocalSyncPort;
-
-		FHUICRSyncCommandArg SessionArg;
-		SessionArg.Type = EHUICRSyncCommandArgType::String;
-		SessionArg.StringValue = LocalSessionId;
-
-		SendReliableCommand(TEXT("FromPC/PCConnectionRequest"), { IpArg, PortArg, SessionArg });
-		return;
-	}
-
-	if (Address.Equals(TEXT("FromPC/PCConnectionRequest"), ESearchCase::IgnoreCase) ||
-		Address.Equals(TEXT("/FromPC/PCConnectionRequest"), ESearchCase::IgnoreCase))
-	{
-		if (Role != EHUICRSyncRole::HMD || Args.Num() < 2 ||
-			Args[0].Type != EHUICRSyncCommandArgType::String ||
-			Args[1].Type != EHUICRSyncCommandArgType::Int32)
+		else
 		{
-			return;
+			LocalParticipantId = Args[4].IntValue;
+			TArray<int32> Roster;
+			for (int32 Index = 6; Index < Args.Num(); ++Index)
+			{
+				Roster.Add(Args[Index].IntValue);
+			}
+			RefreshPeerInfoSnapshot();
+			ApplyHMDRoster(Args[5].IntValue, Roster);
 		}
-
-		RemoteIpAddress = Args[0].StringValue;
-		RemoteSyncPort = Args[1].IntValue;
-		const FString PeerId = RegisterOrUpdatePeer(Peer.Info.PeerId, EHUICRSyncRole::PC, RemoteIpAddress, RemoteSyncPort);
-		SetDefaultPeer(PeerId);
-		InitializeSenderSocket(RemoteIpAddress, RemoteSyncPort);
-
-		bConnectionState = true;
-		OnConnectionStateChanged.Broadcast(bConnectionState);
 		return;
 	}
 
 	if (Address.Equals(TEXT("FromPC/SyncSpawnBegin"), ESearchCase::IgnoreCase) ||
 		Address.Equals(TEXT("/FromPC/SyncSpawnBegin"), ESearchCase::IgnoreCase))
 	{
-		if (Role == EHUICRSyncRole::HMD)
+		if (Role == EHUICRSyncRole::HMD && !bManagedCalibration)
 		{
 			bGameStopped = true;
 			ClearLocalSyncActors();
@@ -1532,7 +1873,7 @@ void UHUICRSyncSubsystem::HandleCommandPayload(FHUICRSyncPeerRuntimeState& Peer,
 		Address.Equals(TEXT("FromHMD/SyncSpawnReady"), ESearchCase::IgnoreCase) ||
 		Address.Equals(TEXT("/FromHMD/SyncSpawnReady"), ESearchCase::IgnoreCase))
 	{
-		if (Role == EHUICRSyncRole::PC)
+		if (Role == EHUICRSyncRole::PC && !bManagedCalibration)
 		{
 			CompleteSyncSceneAsAuthority();
 		}
@@ -1542,7 +1883,7 @@ void UHUICRSyncSubsystem::HandleCommandPayload(FHUICRSyncPeerRuntimeState& Peer,
 	if (Address.Equals(TEXT("FromPC/GameStart"), ESearchCase::IgnoreCase) ||
 		Address.Equals(TEXT("/FromPC/GameStart"), ESearchCase::IgnoreCase))
 	{
-		if (Role == EHUICRSyncRole::HMD)
+		if (Role == EHUICRSyncRole::HMD && !bManagedCalibration)
 		{
 			bGameStopped = false;
 			OnSyncSceneReady.Broadcast();
@@ -1625,4 +1966,283 @@ void UHUICRSyncSubsystem::HandleCommandPayload(FHUICRSyncPeerRuntimeState& Peer,
 		return;
 	}
 
+}
+
+void UHUICRSyncSubsystem::ResetLocalSession()
+{
+	LocalSession = FGuid::NewGuid();
+	LocalSessionId = LocalSession.ToString();
+	PoseSequence = 0;
+}
+
+void UHUICRSyncSubsystem::WriteSessionHeader(FArchive& Writer, const FHUICRSyncPeerRuntimeState& Peer) const
+{
+	uint32 Magic = HUICRSyncProtocol::SessionMagic;
+	FGuid Source = LocalSession;
+	FGuid Target = Peer.RemoteSession;
+	Writer << Magic << Source << Target;
+}
+
+FHUICRSyncPeerRuntimeState* UHUICRSyncSubsystem::AcceptHandshake(const FIPv4Endpoint& Sender, const FHUICRSyncCommandPayload& Hello)
+{
+	const auto& Args = Hello.Args;
+	if (Args.Num() < 4 || Args[0].Type != EHUICRSyncCommandArgType::String ||
+		Args[1].Type != EHUICRSyncCommandArgType::Int32 || Args[1].IntValue <= 0 || Args[1].IntValue >= 65535 ||
+		Args[2].Type != EHUICRSyncCommandArgType::String)
+	{
+		return nullptr;
+	}
+	FGuid Session;
+	if (!FGuid::Parse(Args[2].StringValue, Session) || !Session.IsValid() || RetiredSessions.Contains(Session))
+	{
+		return nullptr;
+	}
+	const FString Ip = Sender.Address.ToString();
+	const int32 SyncPort = Args[1].IntValue;
+	const FString PeerId = MakePeerId(Ip, SyncPort);
+	const FString Address = Hello.Address.StartsWith(TEXT("/")) ? Hello.Address.Mid(1) : Hello.Address;
+
+	if (Role == EHUICRSyncRole::PC)
+	{
+		if (!Address.Equals(TEXT("FromHMD/HMDConnectionRequest"), ESearchCase::IgnoreCase) ||
+			Args[3].Type != EHUICRSyncCommandArgType::Int32 || Args[3].IntValue != HUICRSyncProtocol::ProtocolVersion)
+		{
+			return nullptr;
+		}
+	}
+	else if (Role == EHUICRSyncRole::HMD)
+	{
+		if (!Address.Equals(TEXT("FromPC/PCConnectionRequest"), ESearchCase::IgnoreCase) ||
+			PeerId != DefaultPeerId || Args.Num() < 7 || Args[3].Type != EHUICRSyncCommandArgType::String ||
+			Args[3].StringValue != LocalSessionId || Args[4].Type != EHUICRSyncCommandArgType::Int32 ||
+			Args[4].IntValue <= 0 || Args[5].Type != EHUICRSyncCommandArgType::Int32 || Args[5].IntValue <= 0)
+		{
+			return nullptr;
+		}
+		bool bContainsLocalId = false;
+		int32 PreviousId = 0;
+		for (int32 Index = 6; Index < Args.Num(); ++Index)
+		{
+			if (Args[Index].Type != EHUICRSyncCommandArgType::Int32 || Args[Index].IntValue <= PreviousId)
+			{
+				return nullptr;
+			}
+			PreviousId = Args[Index].IntValue;
+			bContainsLocalId |= PreviousId == Args[4].IntValue;
+		}
+		if (!bContainsLocalId || (LocalParticipantId != 0 && LocalParticipantId != Args[4].IntValue))
+		{
+			return nullptr;
+		}
+	}
+	else
+	{
+		return nullptr;
+	}
+	if (!EnsureSenderSocket())
+	{
+		return nullptr;
+	}
+	for (const TPair<FString, FHUICRSyncPeerRuntimeState>& Pair : Peers)
+	{
+		const FHUICRSyncPeerRuntimeState& Other = Pair.Value;
+		if (Pair.Key != PeerId && (Other.RemoteSession == Session ||
+			(Other.Info.IpAddress == Ip && Other.SenderPort == Sender.Port)))
+		{
+			return nullptr;
+		}
+	}
+	FHUICRSyncPeerRuntimeState* Peer = FindPeer(PeerId);
+	if (Peer && Peer->RemoteSession.IsValid() && Peer->RemoteSession != Session)
+	{
+		if (Role == EHUICRSyncRole::HMD)
+		{
+			// A new PC process needs a fresh connect attempt; don't let stale replies replace it.
+			return nullptr;
+		}
+		RemoveParticipant(PeerId);
+		Peer = nullptr;
+	}
+	if (!Peer)
+	{
+		const auto PeerRole = Role == EHUICRSyncRole::PC ? EHUICRSyncRole::HMD : EHUICRSyncRole::PC;
+		RegisterOrUpdatePeer(PeerId, PeerRole, Ip, SyncPort);
+		Peer = FindPeer(PeerId);
+	}
+	if (!Peer || (Peer->RemoteSession.IsValid() && Peer->SenderPort != Sender.Port))
+	{
+		return nullptr;
+	}
+	Peer->RemoteSession = Session;
+	Peer->SenderPort = Sender.Port;
+	return Peer;
+}
+
+void UHUICRSyncSubsystem::SetConnected(bool bConnected)
+{
+	if (bConnectionState != bConnected)
+	{
+		bConnectionState = bConnected;
+		OnConnectionStateChanged.Broadcast(bConnected);
+	}
+}
+
+void UHUICRSyncSubsystem::UpdatePCParticipants()
+{
+	++RosterRevision;
+	ConnectedHMDCount = ConnectedParticipantIds.Num();
+	HostParticipantId = ConnectedParticipantIds.IsEmpty() ? 0 : ConnectedParticipantIds[0];
+	DefaultPeerId.Reset();
+	for (const TPair<FString, FHUICRSyncPeerRuntimeState>& Pair : Peers)
+	{
+		if (Pair.Value.Info.bConnected)
+		{
+			if (Pair.Value.Info.ParticipantId == HostParticipantId)
+			{
+				SetDefaultPeer(Pair.Key);
+			}
+			SendPresence(Pair.Value, false);
+		}
+	}
+	RefreshPeerInfoSnapshot();
+	SetConnected(ConnectedHMDCount > 0);
+	UE_LOG(LogTemp, Log, TEXT("HUICRSync roster revision %d, Host=%d, connected HMDs=%d"), RosterRevision, HostParticipantId, ConnectedHMDCount);
+	UpdateCalibrationParticipants();
+	OnParticipantsChanged.Broadcast();
+}
+
+void UHUICRSyncSubsystem::ApplyHMDRoster(int32 Revision, const TArray<int32>& Participants)
+{
+	if (Revision <= RosterRevision || !Participants.Contains(LocalParticipantId) || Participants.IsEmpty())
+	{
+		return;
+	}
+	int32 PreviousId = 0;
+	for (int32 Id : Participants)
+	{
+		if (Id <= PreviousId)
+		{
+			return;
+		}
+		PreviousId = Id;
+	}
+	RosterRevision = Revision;
+	if (LocalParticipantId == Participants[0] && !bIsLocalHMDHost && bConnectionState)
+	{
+		// Do not transmit work queued by a Guest just because the headset is now Host.
+		ClearSessionTraffic();
+	}
+	ConnectedParticipantIds = Participants;
+	ConnectedHMDCount = Participants.Num();
+	HostParticipantId = Participants[0];
+	bIsLocalHMDHost = HostParticipantId == LocalParticipantId;
+	SetConnected(true);
+	UE_LOG(LogTemp, Log, TEXT("HUICRSync local participant=%d Host=%d connected HMDs=%d"), LocalParticipantId, HostParticipantId, ConnectedHMDCount);
+	OnParticipantsChanged.Broadcast();
+}
+
+void UHUICRSyncSubsystem::RemoveParticipant(const FString& PeerId)
+{
+	FHUICRSyncPeerRuntimeState Removed;
+	if (!Peers.RemoveAndCopyValue(PeerId, Removed))
+	{
+		return;
+	}
+	if (Role == EHUICRSyncRole::PC)
+	{
+		RetiredSessions.Add(Removed.RemoteSession);
+		if (HostParticipantId == Removed.Info.ParticipantId)
+		{
+			// A partially transmitted scene or calibration batch belongs only to the departing Host.
+			ClearSessionTraffic();
+			RemoteIpAddress.Reset();
+		}
+		ConnectedParticipantIds.Remove(Removed.Info.ParticipantId);
+		UpdatePCParticipants();
+	}
+	else
+	{
+		ClearSessionTraffic();
+		ResetCalibrationSession();
+		DefaultPeerId.Reset();
+		ConnectedParticipantIds.Reset();
+		LocalParticipantId = HostParticipantId = ConnectedHMDCount = 0;
+		bIsLocalHMDHost = false;
+		RosterRevision = 0;
+		RefreshPeerInfoSnapshot();
+		ResetLocalSession();
+		SetConnected(false);
+		OnParticipantsChanged.Broadcast();
+	}
+}
+
+void UHUICRSyncSubsystem::SendPresence(const FHUICRSyncPeerRuntimeState& Peer, bool bLeaving)
+{
+	if (!SenderSocket || !Peer.UDPAddr || !Peer.RemoteSession.IsValid())
+	{
+		return;
+	}
+	TArray<uint8> Buffer;
+	FMemoryWriter Writer(Buffer, true);
+	WriteSessionHeader(Writer, Peer);
+	uint32 Magic = bLeaving ? HUICRSyncProtocol::LeaveMagic : HUICRSyncProtocol::PresenceMagic;
+	Writer << Magic;
+	if (!bLeaving && Role == EHUICRSyncRole::PC)
+	{
+		Writer << RosterRevision << ConnectedParticipantIds;
+		WriteCalibrationStatus(Writer, Peer.Info.ParticipantId);
+	}
+	int32 Sent = 0;
+	SenderSocket->SendTo(Buffer.GetData(), Buffer.Num(), Sent, *Peer.UDPAddr);
+}
+
+void UHUICRSyncSubsystem::TickPresence()
+{
+	const double Now = FPlatformTime::Seconds();
+	const float Interval = FMath::Max(0.1f, HeartbeatIntervalSeconds);
+	const float Timeout = FMath::Max(2.0f * Interval, PeerTimeoutSeconds);
+	const bool bSendHeartbeat = Now - LastHeartbeatTime >= Interval;
+	TArray<FString> ExpiredPeers;
+	for (const TPair<FString, FHUICRSyncPeerRuntimeState>& Pair : Peers)
+	{
+		const FHUICRSyncPeerRuntimeState& Peer = Pair.Value;
+		if (!Peer.Info.bConnected)
+		{
+			continue;
+		}
+		if (Now - Peer.Info.LastReceiveTime > Timeout)
+		{
+			ExpiredPeers.Add(Pair.Key);
+		}
+		else if (bSendHeartbeat)
+		{
+			SendPresence(Peer, false);
+		}
+	}
+	if (bSendHeartbeat)
+	{
+		LastHeartbeatTime = Now;
+	}
+	for (const FString& Id : ExpiredPeers)
+	{
+		RemoveParticipant(Id);
+	}
+}
+
+void UHUICRSyncSubsystem::SendLocalHeadPose(const FTransform& HeadPoseInPCSpace)
+{
+	FHUICRSyncPeerRuntimeState* Peer = FindDefaultPeer();
+	if (Role != EHUICRSyncRole::HMD || !bConnectionState || !Peer || !Peer->UDPAddr || !SenderSocket || !HeadPoseInPCSpace.IsValid())
+	{
+		return;
+	}
+	TArray<uint8> Buffer;
+	FMemoryWriter Writer(Buffer, true);
+	WriteSessionHeader(Writer, *Peer);
+	uint32 Magic = HUICRSyncProtocol::HeadPoseMagic;
+	uint32 Sequence = ++PoseSequence;
+	FTransform Pose = HeadPoseInPCSpace;
+	Writer << Magic << Sequence << Pose;
+	int32 Sent = 0;
+	SenderSocket->SendTo(Buffer.GetData(), Buffer.Num(), Sent, *Peer->UDPAddr);
 }

@@ -193,10 +193,31 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload")
 	bool SendLocalScreenPayload(int32 ScreenID, const FTransform& ScreenTransform, bool bRemoteControlsLocalScreen);
 
+	bool CaptureCalibrationLayout(FHUICRSyncCalibrationLayout& Layout);
+	bool PreviewHostLayout(const FHUICRSyncCalibrationLayout& Measurements, const FHUICRSyncCalibrationLayout& CommittedLayout,
+		FHUICRSyncCalibrationLayout& Result);
+	void RestoreCalibrationLayout(const FHUICRSyncCalibrationLayout& Layout);
+	bool SaveCommittedCalibration(const FHUICRSyncCalibrationLayout& Layout, bool bGameMotionParallax);
+	bool LoadCommittedCalibration(FHUICRSyncCalibrationLayout& Layout, bool& bGameMotionParallax);
+	void ApplyGameMotionParallax(bool bEnabled, const FHUICRSyncCalibrationLayout& Layout);
+	void ResetGameViewpointTracking();
+	bool RestoreFixedGameViewpoint();
+
 protected:
+	FString GetPCLayoutSaveSlot() const;
+	FTransform GetMainCalibrationReference(const FHUICRSyncPCScreenBinding& Main) const;
+	FTransform GetViewpointReference() const;
+	FTransform FixedViewpointRelative = FTransform::Identity;
+	FTransform LastTrackedGameViewpoint = FTransform::Identity;
+	bool bHasFixedViewpoint = false;
+	bool bHasTrackedGameViewpoint = false;
 	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
 	FTransform PCCalibratorTransform;
 	FTimerHandle PCCalibrationReferenceTimerHandle;
+	int32 CalibrationReferenceRecipientId = 0;
+
+	UFUNCTION()
+	void OnParticipantsChanged();
 
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

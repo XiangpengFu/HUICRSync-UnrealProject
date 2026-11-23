@@ -123,12 +123,12 @@ TSubclassOf<AHUICRSyncActor> AHUICRSyncActor::GetRemoteCounterpartClass() const
 
 FTransform AHUICRSyncActor::ConvertHMDTransformToPC(const FTransform& InHMDTransform) const
 {
-	return SyncSubsystem ? SyncSubsystem->ConvertHMDTransformToPC(InHMDTransform) : InHMDTransform;
+	return SyncSubsystem ? SyncSubsystem->ConvertHMDActorTransformToPC(InHMDTransform) : InHMDTransform;
 }
 
 FTransform AHUICRSyncActor::ConvertPCTransformToHMD(const FTransform& InPCTransform) const
 {
-	return SyncSubsystem ? SyncSubsystem->ConvertPCTransformToHMD(InPCTransform) : InPCTransform;
+	return SyncSubsystem ? SyncSubsystem->ConvertPCActorTransformToHMD(InPCTransform) : InPCTransform;
 }
 
 void AHUICRSyncActor::BeginPlay()
