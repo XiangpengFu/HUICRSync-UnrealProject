@@ -2,12 +2,13 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "HUICRSyncFields.h"
 #include "HUICRSyncTypes.h"
+#include "StructUtils/InstancedStruct.h"
 #include "HUICRSyncActor.generated.h"
 
 class UHUICRSyncSubsystem;
 class UScriptStruct;
-struct FInstancedStruct;
 
 UCLASS(Blueprintable)
 class HUICRSYNCRUNTIME_API AHUICRSyncActor : public AActor
@@ -56,6 +57,26 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Payload")
 	TArray<uint8> ActorReceivePayloadData;
 
+	/** Select the same struct on both actor classes to enable independent shared fields. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "HUICR Sync|Payload")
+	TObjectPtr<UScriptStruct> SharedPayloadStruct;
+
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload", meta = (BlueprintInternalUseOnly = "true"))
+	bool PrepareOutgoingPayloadInternal(const FInstancedStruct& Payload);
+
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload", meta = (BlueprintInternalUseOnly = "true"))
+	bool SetSyncFieldSourceInternal(FName Field, EHUICRSyncFieldSource Source, const FInstancedStruct& Payload);
+
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload", meta = (BlueprintInternalUseOnly = "true"))
+	bool ReadReceivedPayloadInternal(FInstancedStruct& Payload, TArray<FName>& FieldsToApply);
+
+	bool GetPreparedSyncField(FName Field, TArray<uint8>& OutBytes) const;
+	bool GetInitialSyncField(FName Field, TArray<uint8>& OutBytes) const;
+	bool ValidateSyncField(FName Field, const TArray<uint8>* OptionalBytes = nullptr) const;
+	bool ApplyConfirmedSyncField(FName Field, const TArray<uint8>& Value, bool bApplyLocally);
+	void ClearSyncFieldToApply(FName Field);
+	void ResetConfirmedSyncFields();
+
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync")
 	void InitSyncActorID();
 
@@ -97,5 +118,21 @@ protected:
 	void HandleCalibrationStateChanged(bool bNewCalibrationState);
 
 private:
+	UPROPERTY(Transient)
+	FInstancedStruct PreparedFields;
+
+	UPROPERTY(Transient)
+	FInstancedStruct ConfirmedFields;
+
+	struct FPendingFieldSource
+	{
+		EHUICRSyncFieldSource Source;
+		TArray<uint8> Value;
+	};
+
+	TMap<FName, FPendingFieldSource> BeginPlayFieldRequests;
+	TArray<FName> UnreadFields;
+	TArray<FName> LastReadFields;
+	uint64 LastFieldReadFrame = MAX_uint64;
 	bool bHiddenBeforeCalibration = false;
 };

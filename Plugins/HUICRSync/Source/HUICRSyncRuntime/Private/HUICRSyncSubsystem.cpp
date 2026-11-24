@@ -19,7 +19,7 @@ namespace HUICRSyncProtocol
 	static constexpr uint32 PresenceMagic = 0x48555032;
 	static constexpr uint32 LeaveMagic = 0x48554C32;
 	static constexpr uint32 HeadPoseMagic = 0x48554832;
-	static constexpr int32 ProtocolVersion = 11;
+	static constexpr int32 ProtocolVersion = 12;
 
 	static FHUICRSyncCommandArg IntArg(int32 Value)
 	{
@@ -78,7 +78,8 @@ void UHUICRSyncSubsystem::Tick(float DeltaTime)
 {
 	ReceiveData();
 
-	if (!bGameStopped && bConnectionState && (Role == EHUICRSyncRole::PC || bIsLocalHMDHost))
+	if (!bGameStopped && bConnectionState &&
+		(Role == EHUICRSyncRole::PC || bIsLocalHMDHost || (bManagedCalibration && bLocalSceneReady)))
 	{
 		OnPrepareNetDataSend.Broadcast();
 		SendAllQueuedStates();
@@ -88,6 +89,7 @@ void UHUICRSyncSubsystem::Tick(float DeltaTime)
 	TickPresence();
 	TickCalibration();
 	TickManagedScene();
+	TickSyncFields();
 }
 
 TStatId UHUICRSyncSubsystem::GetStatId() const
@@ -268,6 +270,11 @@ void UHUICRSyncSubsystem::ReceiveData()
 			RemoveParticipant(DepartingId);
 			continue;
 		}
+		if (Magic == FieldPacketMagic && Peer)
+		{
+			bReceivedAnyData |= ReceiveFieldPacket(*Peer, Reader);
+			continue;
+		}
 		if (Magic == HUICRSyncProtocol::PresenceMagic)
 		{
 			if (Role == EHUICRSyncRole::HMD)
@@ -353,6 +360,10 @@ void UHUICRSyncSubsystem::ReceiveData()
 				continue;
 			}
 			if (!bHandshake && HandleManagedSceneCommand(*Peer, CommandPayload))
+			{
+				continue;
+			}
+			if (!bHandshake && HandleFieldCommand(*Peer, CommandPayload))
 			{
 				continue;
 			}
@@ -476,8 +487,9 @@ void UHUICRSyncSubsystem::ReceiveData()
 		}
 	}
 
-	if (bReceivedAnyData)
+	if (bReceivedAnyData || bFieldReceivePending)
 	{
+		bFieldReceivePending = false;
 		OnNetDataReceived.Broadcast();
 	}
 
@@ -1079,7 +1091,8 @@ bool UHUICRSyncSubsystem::SendReliableCommandString(const FString& Address, cons
 
 bool UHUICRSyncSubsystem::SendReliableCommandToPeer(const FString& PeerId, const FString& Address, const TArray<FHUICRSyncCommandArg>& Args)
 {
-	const bool bParticipantCommand = Address.StartsWith(TEXT("/HUICRSync/Calibration/"), ESearchCase::CaseSensitive) ||
+	const bool bParticipantCommand = Address == TEXT("/HUICRSync/Fields/Source") ||
+		Address.StartsWith(TEXT("/HUICRSync/Calibration/"), ESearchCase::CaseSensitive) ||
 		Address.StartsWith(TEXT("/HUICRSync/Scene/"), ESearchCase::CaseSensitive);
 	if (!HUICRSyncProtocol::IsConnectionHandshakeAddress(Address) &&
 		(!bConnectionState || (Role == EHUICRSyncRole::HMD && !bIsLocalHMDHost && !bParticipantCommand)))
@@ -1210,9 +1223,15 @@ void UHUICRSyncSubsystem::StopSync()
 		if (Pair.Value.Info.bConnected)
 		{
 			SendPresence(Pair.Value, true);
+			if (Role == EHUICRSyncRole::PC)
+			{
+				RevokeParticipantFields(Pair.Value.Info.ParticipantId);
+			}
 		}
 	}
 	DestroySockets();
+	EarlyFieldRequests.Reset();
+	bFieldReceivePending = false;
 
 	ResetCalibrationSession();
 	Peers.Empty();
@@ -2151,6 +2170,7 @@ void UHUICRSyncSubsystem::RemoveParticipant(const FString& PeerId)
 	if (Role == EHUICRSyncRole::PC)
 	{
 		RetiredSessions.Add(Removed.RemoteSession);
+		RevokeParticipantFields(Removed.Info.ParticipantId);
 		if (HostParticipantId == Removed.Info.ParticipantId)
 		{
 			// A partially transmitted scene or calibration batch belongs only to the departing Host.

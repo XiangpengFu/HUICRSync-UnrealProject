@@ -13,13 +13,15 @@ class AHUICRSyncPCManagerBase;
 class AHUICRSyncHMDManagerBase;
 class UPrimitiveComponent;
 struct FIPv4Endpoint;
+enum class EHUICRSyncFieldSource : uint8;
 
 enum class EHUICRSyncSceneOp : uint8
 {
 	Reset,
 	Spawn,
 	Destroy,
-	Ready
+	Ready,
+	Field
 };
 
 struct FHUICRSyncSceneOperation
@@ -169,6 +171,7 @@ public:
 	bool SubmitCalibration(const FHUICRSyncCalibrationLayout& LocalMeasurements);
 	bool RequestCalibrationPreview(int32 ScreenID);
 	bool UsesManagedCalibration() const { return bManagedCalibration; }
+	bool RequestSyncFieldSource(AHUICRSyncActor* Actor, FName Field, EHUICRSyncFieldSource Source, const TArray<uint8>& SpecifiedValue);
 	bool HasAppliedCalibration() const;
 	void RestoreLocalCalibrationId(const FGuid& LayoutId);
 	void SetCalibrationMessage(const FString& Message);
@@ -464,6 +467,55 @@ private:
 		bool bSpawnedAtRuntime = false;
 	};
 	TMap<FString, FManagedSceneActor> ManagedSceneActors;
+	struct FFieldDelivery
+	{
+		uint64 SentEpoch = 0;
+		uint32 SentSequence = 0;
+		double RetryAt = 0;
+		bool bAcknowledged = false;
+	};
+	struct FSharedField
+	{
+		uint64 Epoch = 0;
+		uint32 Sequence = 0;
+		int32 Writer = INDEX_NONE;
+		TArray<uint8> Value;
+		TMap<int32, uint32> LastRequests;
+		TMap<int32, FFieldDelivery> Deliveries;
+		// On the writing HMD, the last sample remains pending until echoed by the PC.
+		uint32 UploadSequence = 0;
+		TArray<uint8> UploadValue;
+		double RetryUploadAt = 0;
+	};
+	struct FFieldActorState
+	{
+		uint64 Instance = 0;
+		TWeakObjectPtr<AHUICRSyncActor> Actor;
+		TMap<FName, FSharedField> Fields;
+	};
+	struct FEarlyFieldRequest
+	{
+		TWeakObjectPtr<AHUICRSyncActor> Actor;
+		FName Field;
+		EHUICRSyncFieldSource Source;
+		TArray<uint8> Value;
+	};
+	TArray<FEarlyFieldRequest> EarlyFieldRequests;
+	TMap<int32, FFieldActorState> FieldActors;
+	bool bFieldReceivePending = false;
+	uint64 NextFieldVersion = 0;
+	uint32 NextFieldRequest = 0;
+	static constexpr uint32 FieldPacketMagic = 0x48554644; // HUFD
+	FFieldActorState& EnsurePCFieldActor(AHUICRSyncActor& Actor);
+	void SeedInitialFields(AHUICRSyncActor& Actor);
+	void SetFieldWriter(AHUICRSyncActor& Actor, FName Field, FSharedField& State, int32 Writer, const TArray<uint8>* Value);
+	void RevokeParticipantFields(int32 ParticipantId);
+	void TickSyncFields();
+	bool HandleFieldCommand(FHUICRSyncPeerRuntimeState& Peer, const FHUICRSyncCommandPayload& Command);
+	bool ReceiveFieldPacket(FHUICRSyncPeerRuntimeState& Peer, FArchive& Reader);
+	bool ReceiveFieldState(FArchive& Reader, bool bSnapshot, FHUICRSyncPeerRuntimeState* Peer);
+	void QueueFieldSnapshot(FHUICRSyncPeerRuntimeState& Peer, const FFieldActorState& ActorState);
+	void SendFieldPacket(FHUICRSyncPeerRuntimeState& Peer, uint8 Kind, const TArray<uint8>& Payload);
 	TSet<FString> LocalOnlySceneActors;
 	struct FManagedActorState
 	{

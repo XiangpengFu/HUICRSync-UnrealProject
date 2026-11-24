@@ -136,6 +136,7 @@ bool UHUICRSyncSubsystem::RegisterManagedSceneMirror(AHUICRSyncActor* Actor, UCl
 	Record.RemoteClass = RemoteClass;
 	Record.InitialPayload = InitialPayload;
 	Record.ExcludedParticipantId = ExcludedParticipantId;
+	SeedInitialFields(*Actor);
 	for (auto& Pair : Peers)
 	{
 		if (Pair.Value.SceneGeneration > 0 && !Pair.Value.bNeedsSceneSnapshot &&
@@ -178,9 +179,18 @@ void UHUICRSyncSubsystem::QueueManagedSceneMirror(FHUICRSyncPeerRuntimeState& Pe
 		FManagedActorState State = *LatestState;
 		Writer << State.Sequence << State.Entry;
 	}
+	SeedInitialFields(Actor);
+	const FFieldActorState* FieldState = FieldActors.Find(Actor.ActorID);
+	uint64 FieldInstance = FieldState ? FieldState->Instance : 0;
+	FString SchemaPath = FieldState ? GetPathNameSafe(Actor.SharedPayloadStruct) : FString();
+	Writer << FieldInstance << SchemaPath;
 	if (Operation.Bytes.Num() <= HUICRSyncScene::MaxOperationBytes)
 	{
 		Peer.SceneOperations.Add(MoveTemp(Operation));
+		if (FieldState)
+		{
+			QueueFieldSnapshot(Peer, *FieldState);
+		}
 	}
 	else
 	{
@@ -190,6 +200,10 @@ void UHUICRSyncSubsystem::QueueManagedSceneMirror(FHUICRSyncPeerRuntimeState& Pe
 
 void UHUICRSyncSubsystem::UnregisterManagedSceneMirror(AHUICRSyncActor& Actor)
 {
+	if (const FFieldActorState* State = FieldActors.Find(Actor.ActorID); State && State->Actor.Get() == &Actor)
+	{
+		FieldActors.Remove(Actor.ActorID);
+	}
 	const FString Key = MakeActorKey(Actor.TypeCode, Actor.ActorID);
 	LocalOnlySceneActors.Remove(Key);
 	LatestManagedActorStates.Remove(Key);
@@ -455,7 +469,7 @@ bool UHUICRSyncSubsystem::HandleManagedSceneCommand(FHUICRSyncPeerRuntimeState& 
 	const int32 Kind = Args[2].IntValue;
 	const int32 TotalSize = Args[3].IntValue;
 	if (Generation <= 0 || Generation < ExpectedSceneGeneration || Generation < LocalSceneGeneration || Sequence <= 0 ||
-		Kind < 0 || Kind > static_cast<int32>(EHUICRSyncSceneOp::Ready) ||
+		Kind < 0 || Kind > static_cast<int32>(EHUICRSyncSceneOp::Field) ||
 		TotalSize <= 0 || TotalSize > MaxOperationBytes || Args[4].StringValue.Len() > MaxChunkBytes * 2)
 	{
 		return true;
@@ -549,6 +563,9 @@ bool UHUICRSyncSubsystem::ApplyManagedSceneOperation(EHUICRSyncSceneOp Kind, con
 		{
 			Reader << SnapshotStateSequence << State;
 		}
+		uint64 FieldInstance = 0;
+		FString SchemaPath;
+		Reader << FieldInstance << SchemaPath;
 		FString ClassPath;
 		int32 Id = -1;
 		FTransform Transform;
@@ -583,6 +600,17 @@ bool UHUICRSyncSubsystem::ApplyManagedSceneOperation(EHUICRSyncSceneOp Kind, con
 			return false;
 		}
 		LocalSceneMirrors.Add(Key, Actor);
+		if (FieldInstance != 0 && Actor->SharedPayloadStruct && SchemaPath == Actor->SharedPayloadStruct->GetPathName())
+		{
+			FFieldActorState& FieldActor = FieldActors.Add(Id);
+			FieldActor.Instance = FieldInstance;
+			FieldActor.Actor = Actor;
+		}
+		else if (FieldInstance != 0 || Actor->SharedPayloadStruct)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("HUICRSync shared payload type differs for %s (PC %s, HMD %s)"),
+				*Actor->GetPathName(), *SchemaPath, *GetPathNameSafe(Actor->SharedPayloadStruct));
+		}
 		if (bCalibrationPaused)
 		{
 			PauseManagedActor(*Actor);
@@ -624,8 +652,13 @@ bool UHUICRSyncSubsystem::ApplyManagedSceneOperation(EHUICRSyncSceneOp Kind, con
 		}
 		RemovedSceneActorIds.Add(Id);
 		ReceivedManagedActorStates.Remove(Id);
+		FieldActors.Remove(Id);
 		return true;
 	}
+	case EHUICRSyncSceneOp::Field:
+		// A mismatched/incompatible Blueprint field cannot block the rest of the scene from spawning.
+		ReceiveFieldState(Reader, true, nullptr);
+		return true;
 	case EHUICRSyncSceneOp::Ready:
 	{
 		int32 Generation = 0;
@@ -638,6 +671,10 @@ bool UHUICRSyncSubsystem::ApplyManagedSceneOperation(EHUICRSyncSceneOp Kind, con
 
 void UHUICRSyncSubsystem::ClearLocalSceneMirrors()
 {
+	if (Role == EHUICRSyncRole::HMD)
+	{
+		FieldActors.Reset();
+	}
 	auto Mirrors = MoveTemp(LocalSceneMirrors);
 	LocalSceneMirrors.Reset();
 	for (const auto& Pair : Mirrors)

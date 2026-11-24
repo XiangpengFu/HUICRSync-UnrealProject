@@ -18,6 +18,11 @@
 			"Name": "HUICRSyncRuntime",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "HUICRSyncBlueprintNodes",
+			"Type": "UncookedOnly",
+			"LoadingPhase": "PreDefault"
 		}
 	],
 	"Plugins": [

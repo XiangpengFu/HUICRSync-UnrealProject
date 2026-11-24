@@ -403,6 +403,7 @@ void UHUICRSyncSubsystem::TryGrantCalibrationTurn(int32 ParticipantId)
 	Turn.bCanEditLayout = bHostTurn;
 	if (FHUICRSyncPeerRuntimeState* Peer = FindCalibrationParticipant(ParticipantId))
 	{
+		RevokeParticipantFields(ParticipantId);
 		DiscardManagedSceneTransfer(*Peer);
 	}
 	RefreshActiveCalibrations();
