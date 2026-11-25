@@ -7,8 +7,8 @@
 UENUM()
 enum class EHUICRSyncPayloadWriteMode : uint8
 {
-	Initial UMETA(ToolTip = "Set the starting values before the PC captures the actor for spawning."),
-	Outgoing UMETA(ToolTip = "Prepare this device's latest local values for fields it controls.")
+	Initial UMETA(DisplayName = "Initial Values", ToolTip = "Set the starting values before the PC captures the actor for spawning."),
+	Outgoing UMETA(DisplayName = "Current Local Values", ToolTip = "Prepare this device's latest local values for fields it controls.")
 };
 
 UENUM()

@@ -340,7 +340,7 @@ FText UK2Node_HUICRSyncPayload::GetTooltipText() const
 {
 	if (IsA<UK2Node_WriteSyncPayload>())
 	{
-		return LOCTEXT("WriteSyncPayloadTip", "Initial sets the values sent when the PC spawns the actor's mirrors. Outgoing prepares current local values for fields following this device.");
+		return LOCTEXT("WriteSyncPayloadTip", "Choose Initial Values to set the values sent when the PC spawns the actor's mirrors. Choose Current Local Values to prepare the latest values on this device for fields it controls.");
 	}
 	if (IsA<UK2Node_ReadSyncPayload>())
 	{
