@@ -106,6 +106,29 @@ void AHUICRSyncActor::DeserializePayload()
 	}
 }
 
+void AHUICRSyncActor::InitializeSpawnPayload(const TArray<uint8>& SpawnPayload)
+{
+	bHasExplicitSpawnPayload = !SpawnPayload.IsEmpty();
+	ActorInitPayloadData = SpawnPayload;
+}
+
+bool AHUICRSyncActor::SetInitialPayloadInternal(const FInstancedStruct& Payload)
+{
+	// Construction Script and BeginPlay may provide defaults when the spawner supplied none.
+	if ((bHasExplicitSpawnPayload && !HasActorBegunPlay()) || !SharedPayloadStruct ||
+		Payload.GetScriptStruct() != SharedPayloadStruct || !HUICRSyncFields::CanUseLegacyBytes(SharedPayloadStruct))
+	{
+		return false;
+	}
+	TArray<uint8> InitialBytes;
+	if (!UHUICRSyncPayloadLibrary::WriteInstancedStruct(InitialBytes, SharedPayloadStruct, Payload))
+	{
+		return false;
+	}
+	ActorInitPayloadData = MoveTemp(InitialBytes);
+	return true;
+}
+
 bool AHUICRSyncActor::PrepareOutgoingPayloadInternal(const FInstancedStruct& Payload)
 {
 	if (!SharedPayloadStruct || !bSendDataToPeer || Payload.GetScriptStruct() != SharedPayloadStruct)

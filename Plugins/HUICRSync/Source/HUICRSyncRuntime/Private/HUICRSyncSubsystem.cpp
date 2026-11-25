@@ -1795,7 +1795,7 @@ AHUICRSyncActor* UHUICRSyncSubsystem::SpawnSyncActorInternal(UClass* SpawnClass,
 	NewActor->bAutoAssignActorID = false;
 	NewActor->SetSyncActorID(ActorID);
 	NewActor->SyncSubsystem = this;
-	NewActor->ActorInitPayloadData = InitPayloadBytes;
+	NewActor->InitializeSpawnPayload(InitPayloadBytes);
 	UGameplayStatics::FinishSpawningActor(NewActor, SpawnTransform);
 	RegisterSyncActor(NewActor);
 	return NewActor;

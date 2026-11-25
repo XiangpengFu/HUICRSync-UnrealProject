@@ -122,7 +122,10 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 	auto* Ball = World->SpawnActor<AHUICRSyncFieldTestActor>();
 	Ball->SyncSubsystem = PC;
 	Ball->SetSyncActorID(14);
-	UHUICRSyncPayloadLibrary::WriteInstancedStruct(Ball->ActorInitPayloadData, PayloadType, Sample(10, 1));
+	if (!TestTrue(TEXT("The placed actor can set its initial payload in construction"), Ball->bSetConstructionDefault))
+	{
+		return false;
+	}
 	PC->RegisterSyncActor(Ball);
 	auto Mirror = [Ball](AHUICRSyncHMDManagerBase* Manager)
 	{
@@ -141,6 +144,41 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	if (!TestTrue(TEXT("First mirror has the initial values before any outgoing sample"), IsState(Mirror(A), 10, 1)))
+	{
+		return false;
+	}
+
+	TArray<uint8> ExplicitBytes;
+	if (!TestTrue(TEXT("The caller can still supply byte-based spawn values"),
+		UHUICRSyncPayloadLibrary::WriteInstancedStruct(ExplicitBytes, PayloadType, Sample(41, 9))))
+	{
+		return false;
+	}
+	auto* Spawned = Cast<AHUICRSyncFieldTestActor>(PC->SpawnSyncActorAsAuthority(
+		AHUICRSyncFieldTestActor::StaticClass(), FTransform::Identity, ExplicitBytes));
+	if (!TestNotNull(TEXT("Runtime actor spawned with caller-supplied initial values"), Spawned) ||
+		!TestTrue(TEXT("PC construction sees and preserves the caller's initial values"),
+			Spawned->InitialBytesAtConstruction == ExplicitBytes && Spawned->ActorInitPayloadData == ExplicitBytes &&
+			!Spawned->bSetConstructionDefault && IsState(Spawned, 41, 9)) ||
+		!WaitFor(TEXT("First mirror construction and initial shared fields match caller-supplied values"), [&]
+		{
+			auto* Other = Cast<AHUICRSyncFieldTestActor>(A->SyncSubsystem->FindSyncActor(Spawned->TypeCode, Spawned->ActorID));
+			return Other && Other->InitialBytesAtConstruction == ExplicitBytes && !Other->bSetConstructionDefault &&
+				IsState(Other, 41, 9);
+		}))
+	{
+		return false;
+	}
+	auto* FromDefaults = Cast<AHUICRSyncFieldTestActor>(PC->SpawnSyncActorAsAuthority(
+		AHUICRSyncFieldTestActor::StaticClass(), FTransform::Identity, {}));
+	if (!TestNotNull(TEXT("Runtime actor spawned without explicit init"), FromDefaults) ||
+		!TestTrue(TEXT("Empty spawn input uses the runtime actor's construction default"), FromDefaults->bSetConstructionDefault) ||
+		!WaitFor(TEXT("Runtime actor's authored default reaches the first mirror"), [&]
+		{ return IsState(A->SyncSubsystem->FindSyncActor(FromDefaults->TypeCode, FromDefaults->ActorID), 10, 1); }))
+	{
+		return false;
+	}
 	Ball->PrepareOutgoingPayloadInternal(Sample(12, 99));
 	if (!WaitFor(TEXT("PC drives motion; initial scalar is preserved on A"), [&] { return IsState(Mirror(A), 12, 1); }))
 	{
@@ -156,6 +194,12 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	auto* BallB = Mirror(B);
+	if (!TestTrue(TEXT("Late guest keeps birth payload separate from the newer motion snapshot"),
+		BallB->ActorInitPayloadData == Ball->ActorInitPayloadData &&
+		CastChecked<AHUICRSyncFieldTestActor>(BallB)->InitialBytesAtConstruction == Ball->ActorInitPayloadData))
+	{
+		return false;
+	}
 	BallB->PrepareOutgoingPayloadInternal(Sample(30, 7));
 	BallB->SetSyncFieldSourceInternal(Color, Fixed, Sample(900, 2));
 	BallA->PrepareOutgoingPayloadInternal(Sample(25, 4));

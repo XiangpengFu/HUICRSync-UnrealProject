@@ -10,4 +10,19 @@ class AHUICRSyncFieldTestActor : public AHUICRSyncActor
 	GENERATED_BODY()
 public:
 	AHUICRSyncFieldTestActor() { SharedPayloadStruct = FHUICRSyncScreenPayload::StaticStruct(); }
+
+	// Exercise the same default assignment a Blueprint can make in its construction script.
+	virtual void OnConstruction(const FTransform& Transform) override
+	{
+		Super::OnConstruction(Transform);
+		InitialBytesAtConstruction = ActorInitPayloadData;
+		FInstancedStruct Initial = FInstancedStruct::Make<FHUICRSyncScreenPayload>();
+		auto& Value = Initial.GetMutable<FHUICRSyncScreenPayload>();
+		Value.Transform = FTransform(FVector(10, 0, 0));
+		Value.ScreenID = 1;
+		bSetConstructionDefault = SetInitialPayloadInternal(Initial);
+	}
+
+	TArray<uint8> InitialBytesAtConstruction;
+	bool bSetConstructionDefault = false;
 };

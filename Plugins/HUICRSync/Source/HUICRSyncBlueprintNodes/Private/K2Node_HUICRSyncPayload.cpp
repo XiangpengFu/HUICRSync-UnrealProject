@@ -216,6 +216,10 @@ void UK2Node_HUICRSyncPayload::GetMenuActions(FBlueprintActionDatabaseRegistrar&
 
 FText UK2Node_HUICRSyncPayload::GetNodeTitle(ENodeTitleType::Type TitleType) const
 {
+	if (IsA<UK2Node_SetInitialPayload>())
+	{
+		return LOCTEXT("SetInitial", "Set Initial Payload");
+	}
 	if (IsA<UK2Node_PrepareOutgoingPayload>())
 	{
 		return LOCTEXT("Prepare", "Prepare Outgoing Payload");
@@ -225,6 +229,10 @@ FText UK2Node_HUICRSyncPayload::GetNodeTitle(ENodeTitleType::Type TitleType) con
 
 FText UK2Node_HUICRSyncPayload::GetTooltipText() const
 {
+	if (IsA<UK2Node_SetInitialPayload>())
+	{
+		return LOCTEXT("SetInitialTip", "Set the starting values sent when the PC creates this actor's mirrors. Call during actor setup, before its first scene capture. Later gameplay changes use Set Sync Field Source.");
+	}
 	if (IsA<UK2Node_PrepareOutgoingPayload>())
 	{
 		return LOCTEXT("PrepareTip", "Prepare this actor's current local values. Only fields following this device can be sent.");
@@ -246,6 +254,12 @@ void UK2Node_HUICRSyncPayload::ExpandNode(FKismetCompilerContext& Compiler, UEdG
 	if (!Struct)
 	{
 		Compiler.MessageLog.Error(TEXT("@@ requires a Shared Payload Struct in the Sync Actor's Class Defaults."), this);
+		BreakAllNodeLinks();
+		return;
+	}
+	if (IsA<UK2Node_SetInitialPayload>() && !HUICRSyncFields::CanUseLegacyBytes(Struct))
+	{
+		Compiler.MessageLog.Error(TEXT("@@ requires a value-only Shared Payload Struct for spawn data. Use a shared ID for an object reference and remove delegates from this struct."), this);
 		BreakAllNodeLinks();
 		return;
 	}
@@ -285,9 +299,19 @@ void UK2Node_HUICRSyncPayload::ExpandNode(FKismetCompilerContext& Compiler, UEdG
 		}
 		Compiler.MovePinLinksToIntermediate(*Pin, *Intermediate);
 	};
-	const FName FunctionName = bRead ? GET_FUNCTION_NAME_CHECKED(AHUICRSyncActor, ReadReceivedPayloadInternal)
-		: bSetSource ? GET_FUNCTION_NAME_CHECKED(AHUICRSyncActor, SetSyncFieldSourceInternal)
-		: GET_FUNCTION_NAME_CHECKED(AHUICRSyncActor, PrepareOutgoingPayloadInternal);
+	FName FunctionName = GET_FUNCTION_NAME_CHECKED(AHUICRSyncActor, PrepareOutgoingPayloadInternal);
+	if (bRead)
+	{
+		FunctionName = GET_FUNCTION_NAME_CHECKED(AHUICRSyncActor, ReadReceivedPayloadInternal);
+	}
+	else if (bSetSource)
+	{
+		FunctionName = GET_FUNCTION_NAME_CHECKED(AHUICRSyncActor, SetSyncFieldSourceInternal);
+	}
+	else if (IsA<UK2Node_SetInitialPayload>())
+	{
+		FunctionName = GET_FUNCTION_NAME_CHECKED(AHUICRSyncActor, SetInitialPayloadInternal);
+	}
 	UK2Node_CallFunction* ActorCall = SpawnCall(AHUICRSyncActor::StaticClass(), FunctionName);
 	auto* BoxCall = SpawnCall(UBlueprintInstancedStructLibrary::StaticClass(),
 		bRead ? GET_FUNCTION_NAME_CHECKED(UBlueprintInstancedStructLibrary, GetInstancedStructValue)

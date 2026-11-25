@@ -2,6 +2,7 @@
 
 #include "K2Node_HUICRSyncPayload.h"
 #include "HUICRSyncActor.h"
+#include "HUICRSyncPayloadLibrary.h"
 #include "HUICRSyncSubsystem.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
@@ -22,6 +23,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHUICRSyncFieldNodeTest, "HUICRSync.Blueprint.S
 
 bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 {
+	for (const FName Name : { GET_MEMBER_NAME_CHECKED(AHUICRSyncActor, ActorInitPayloadData),
+		GET_MEMBER_NAME_CHECKED(AHUICRSyncActor, ActorSendPayloadData), GET_MEMBER_NAME_CHECKED(AHUICRSyncActor, ActorReceivePayloadData) })
+	{
+		const FProperty* Buffer = AHUICRSyncActor::StaticClass()->FindPropertyByName(Name);
+		TestTrue(*FString::Printf(TEXT("%s stays available for Blueprint Get and Set without a Details row"), *Name.ToString()),
+			Buffer && Buffer->HasAnyPropertyFlags(CPF_BlueprintVisible) && !Buffer->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintReadOnly));
+	}
 	auto* PayloadType = LoadObject<UScriptStruct>(nullptr, TEXT("/HUICRSync/BlueprintStructs/BPS_TestActor.BPS_TestActor"));
 	if (!TestNotNull(TEXT("Load the actual Blueprint-defined payload"), PayloadType))
 	{
@@ -54,6 +62,11 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	Add(Event);
 	auto* Prepare = NewObject<UK2Node_PrepareOutgoingPayload>(Graph);
 	Add(Prepare);
+	auto* InitEvent = NewObject<UK2Node_CustomEvent>(Graph);
+	InitEvent->CustomFunctionName = TEXT("SetBirthValues");
+	Add(InitEvent);
+	auto* Initial = NewObject<UK2Node_SetInitialPayload>(Graph);
+	Add(Initial);
 	auto* Select = NewObject<UK2Node_SetSyncFieldSource>(Graph);
 	Add(Select);
 	auto* Read = NewObject<UK2Node_ReadReceivedPayload>(Graph);
@@ -63,9 +76,10 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	{
 		const FName PinName = UK2Node_HUICRSyncPayload::MemberPinName(It->GetFName());
 		auto* Input = Prepare->FindPin(PinName, EGPD_Input);
+		auto* BirthInput = Initial->FindPin(PinName, EGPD_Input);
 		auto* Output = Read->FindPin(PinName, EGPD_Output);
 		if (!TestTrue(TEXT("Each user-defined member has matching typed input and output pins"),
-			Input && Output && Input->PinType == Output->PinType))
+			Input && BirthInput && Output && Input->PinType == Output->PinType && BirthInput->PinType == Output->PinType))
 		{
 			return false;
 		}
@@ -92,6 +106,8 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	Schema->TrySetDefaultValue(*ColorInput, TEXT("0.25,0.5,1.0"));
+	Schema->TrySetDefaultValue(*Initial->FindPinChecked(UK2Node_HUICRSyncPayload::MemberPinName(Color->GetFName())),
+		TEXT("1.0,0.0,0.0"));
 	auto* ApplyMask = Read->FindPin(TEXT("FieldsToApply"), EGPD_Output);
 	TestTrue(TEXT("Read exposes a name array for selective application"),
 		ApplyMask && ApplyMask->PinType.IsArray() && ApplyMask->PinType.PinCategory == UEdGraphSchema_K2::PC_Name);
@@ -103,7 +119,8 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 		Schema->TrySetDefaultValue(*Set->FindPinChecked(TEXT("bHideDuringCalibration")), bValue ? TEXT("true") : TEXT("false"));
 		return Wire(Read->FindPin(PinName), Set->FindPin(UEdGraphSchema_K2::PN_Execute));
 	};
-	if (!Wire(Event->FindPin(UEdGraphSchema_K2::PN_Then), Prepare->FindPin(UEdGraphSchema_K2::PN_Execute)) ||
+	if (!Wire(InitEvent->FindPin(UEdGraphSchema_K2::PN_Then), Initial->FindPin(UEdGraphSchema_K2::PN_Execute)) ||
+		!Wire(Event->FindPin(UEdGraphSchema_K2::PN_Then), Prepare->FindPin(UEdGraphSchema_K2::PN_Execute)) ||
 		!Wire(Prepare->FindPin(UEdGraphSchema_K2::PN_Then), Select->FindPin(UEdGraphSchema_K2::PN_Execute)) ||
 		!Wire(Select->FindPin(UEdGraphSchema_K2::PN_Then), Read->FindPin(UEdGraphSchema_K2::PN_Execute)) ||
 		!AddBranchProbe(TEXT("Valid"), true) || !AddBranchProbe(TEXT("NoValidPayload"), false))
@@ -112,7 +129,7 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	}
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
 	FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection);
-	if (!TestTrue(TEXT("All three nodes compiled to runnable Blueprint bytecode"), Blueprint->Status != BS_Error))
+	if (!TestTrue(TEXT("All four nodes compiled to runnable Blueprint bytecode"), Blueprint->Status != BS_Error))
 	{
 		return false;
 	}
@@ -128,6 +145,18 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	FEditorScriptExecutionGuard AllowScript;
+	Actor->ProcessEvent(Actor->FindFunctionChecked(TEXT("SetBirthValues")), nullptr);
+	FInstancedStruct Birth;
+	if (!TestTrue(TEXT("The compiled initialization node writes an ordinary spawn payload"),
+		UHUICRSyncPayloadLibrary::ReadInstancedStruct(Actor->ActorInitPayloadData, PayloadType, Birth)))
+	{
+		return false;
+	}
+	TestTrue(TEXT("The spawn payload contains the initial node's own color literal"),
+		Color->ContainerPtrToValuePtr<FVector>(Birth.GetMemory())->Equals(FVector(1, 0, 0)));
+	TArray<uint8> Prepared;
+	TestFalse(TEXT("Setting initial values does not prepare an outgoing frame"), Actor->GetPreparedSyncField(Color->GetFName(), Prepared));
+	const TArray<uint8> BirthBytes = Actor->ActorInitPayloadData;
 	Actor->bHideDuringCalibration = true;
 	Actor->ProcessEvent(Probe, nullptr);
 	TestFalse(TEXT("An empty receive buffer takes No Valid Payload"), Actor->bHideDuringCalibration);
@@ -153,6 +182,7 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("Specified color literal survived Blueprint compilation and field publication"),
 		Color->ContainerPtrToValuePtr<FVector>(Confirmed.GetMemory())->Equals(FVector(.25, .5, 1.0)));
+	TestTrue(TEXT("Ongoing updates leave the original spawn payload intact"), Actor->ActorInitPayloadData == BirthBytes);
 	return !HasAnyErrors();
 }
 #endif

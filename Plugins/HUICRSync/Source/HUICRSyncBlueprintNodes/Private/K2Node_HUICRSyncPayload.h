@@ -4,7 +4,7 @@
 #include "HUICRSyncFields.h"
 #include "K2Node_HUICRSyncPayload.generated.h"
 
-/** All three nodes use the shared payload type configured on the owning Sync Actor Blueprint. */
+/** Payload nodes use the shared payload type configured on the owning Sync Actor Blueprint. */
 UCLASS(Abstract)
 class UK2Node_HUICRSyncPayload : public UK2Node
 {
@@ -34,6 +34,12 @@ protected:
 
 	UPROPERTY()
 	EHUICRSyncFieldSource SelectedSource = EHUICRSyncFieldSource::FollowMyPayload;
+};
+
+UCLASS()
+class UK2Node_SetInitialPayload : public UK2Node_HUICRSyncPayload
+{
+	GENERATED_BODY()
 };
 
 UCLASS()

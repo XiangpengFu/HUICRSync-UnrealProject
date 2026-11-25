@@ -48,18 +48,23 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Visibility")
 	bool bHideDuringCalibration = true;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Payload")
+	UPROPERTY(BlueprintReadWrite, Category = "HUICR Sync|Payload")
 	TArray<uint8> ActorInitPayloadData;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Payload")
+	UPROPERTY(BlueprintReadWrite, Category = "HUICR Sync|Payload")
 	TArray<uint8> ActorSendPayloadData;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Payload")
+	UPROPERTY(BlueprintReadWrite, Category = "HUICR Sync|Payload")
 	TArray<uint8> ActorReceivePayloadData;
 
 	/** Select the same struct on both actor classes to enable independent shared fields. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "HUICR Sync|Payload")
 	TObjectPtr<UScriptStruct> SharedPayloadStruct;
+
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload", meta = (BlueprintInternalUseOnly = "true"))
+	bool SetInitialPayloadInternal(const FInstancedStruct& Payload);
+
+	void InitializeSpawnPayload(const TArray<uint8>& SpawnPayload);
 
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload", meta = (BlueprintInternalUseOnly = "true"))
 	bool PrepareOutgoingPayloadInternal(const FInstancedStruct& Payload);
@@ -134,5 +139,6 @@ private:
 	TArray<FName> UnreadFields;
 	TArray<FName> LastReadFields;
 	uint64 LastFieldReadFrame = MAX_uint64;
+	bool bHasExplicitSpawnPayload = false;
 	bool bHiddenBeforeCalibration = false;
 };
