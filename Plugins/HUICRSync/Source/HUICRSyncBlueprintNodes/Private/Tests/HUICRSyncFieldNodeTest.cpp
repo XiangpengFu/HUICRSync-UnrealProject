@@ -72,13 +72,19 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	}
 	const FName ObservedColor(TEXT("ObservedPayloadColor"));
 	const FName ObservedFields(TEXT("ObservedPayloadFields"));
-	FEdGraphPinType VectorPin, MaskPin;
+	const FName AppliedColor(TEXT("ColorAppliedByFieldPin"));
+	const FName AppliedTransform(TEXT("TransformAppliedByFieldPin"));
+	FEdGraphPinType VectorPin, MaskPin, TransformPin;
 	VectorPin.PinCategory = UEdGraphSchema_K2::PC_Struct;
 	VectorPin.PinSubCategoryObject = TBaseStructure<FVector>::Get();
+	TransformPin.PinCategory = UEdGraphSchema_K2::PC_Struct;
+	TransformPin.PinSubCategoryObject = TBaseStructure<FTransform>::Get();
 	MaskPin.PinCategory = UEdGraphSchema_K2::PC_Name;
 	MaskPin.ContainerType = EPinContainerType::Array;
 	FBlueprintEditorUtils::AddMemberVariable(Blueprint, ObservedColor, VectorPin);
 	FBlueprintEditorUtils::AddMemberVariable(Blueprint, ObservedFields, MaskPin);
+	FBlueprintEditorUtils::AddMemberVariable(Blueprint, AppliedColor, VectorPin);
+	FBlueprintEditorUtils::AddMemberVariable(Blueprint, AppliedTransform, TransformPin);
 	Blueprint->GeneratedClass->GetDefaultObject<AHUICRSyncActor>()->SharedPayloadStruct = PayloadType;
 	UEdGraph* Graph = Blueprint->UbergraphPages[0];
 	const auto* Schema = GetDefault<UEdGraphSchema_K2>();
@@ -138,6 +144,7 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	auto* Read = NewObject<UK2Node_ReadReceivedPayload>(Graph);
 	Add(Read);
 	FProperty* Color = nullptr;
+	FProperty* Motion = nullptr;
 	for (TFieldIterator<FProperty> It(PayloadType); It; ++It)
 	{
 		const FName PinName = UK2Node_HUICRSyncPayload::MemberPinName(It->GetFName());
@@ -153,8 +160,12 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 		{
 			Color = *It;
 		}
+		if (Output->PinType.PinSubCategoryObject == TBaseStructure<FTransform>::Get())
+		{
+			Motion = *It;
+		}
 	}
-	if (!TestNotNull(TEXT("Actual payload has a color field"), Color))
+	if (!TestNotNull(TEXT("Actual payload has a color field"), Color) || !TestNotNull(TEXT("Actual payload has a transform field"), Motion))
 	{
 		return false;
 	}
@@ -210,23 +221,44 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 		return Node;
 	};
 	const FName ColorPin = UK2Node_HUICRSyncPayload::MemberPinName(Color->GetFName());
+	const FName MotionPin = UK2Node_HUICRSyncPayload::MemberPinName(Motion->GetFName());
+	const FName ApplyColorPin = UK2Node_HUICRSyncPayload::FieldExecPinName(Color->GetFName());
+	const FName ApplyMotionPin = UK2Node_HUICRSyncPayload::FieldExecPinName(Motion->GetFName());
 	auto* WriteBirth = NewObject<UK2Node_WriteSyncPayload>(Graph);
 	auto* WriteOngoing = NewObject<UK2Node_WriteSyncPayload>(Graph);
 	auto* ReadBirth = NewObject<UK2Node_ReadSyncPayload>(Graph);
 	auto* ReadOngoing = NewObject<UK2Node_ReadSyncPayload>(Graph);
+	auto* ReadFieldsOnly = NewObject<UK2Node_ReadSyncPayload>(Graph);
 	Add(WriteBirth);
 	Add(WriteOngoing);
 	Add(ReadBirth);
 	Add(ReadOngoing);
+	Add(ReadFieldsOnly);
+	for (TFieldIterator<FProperty> It(PayloadType); It; ++It)
+	{
+		const FName ApplyPinName = UK2Node_HUICRSyncPayload::FieldExecPinName(It->GetFName());
+		const UEdGraphPin* ApplyPin = ReadOngoing->FindPin(ApplyPinName, EGPD_Output);
+		if (!TestTrue(TEXT("Read Received generates a separate exec output for each user-defined field"),
+			ApplyPin && ApplyPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec &&
+			ApplyPin->PinFriendlyName.ToString().Contains(It->GetDisplayNameText().ToString()) && !WriteOngoing->FindPin(ApplyPinName)))
+		{
+			return false;
+		}
+	}
 	TestEqual(TEXT("Write initially prepares outgoing data"), WriteBirth->FindPinChecked(TEXT("Mode"))->DefaultValue, FString(TEXT("Outgoing")));
 	TestEqual(TEXT("Read initially selects received state"), ReadBirth->FindPinChecked(TEXT("Mode"))->DefaultValue, FString(TEXT("Received")));
 	auto* ReadBirthEvent = NewEvent(TEXT("ReadBirth"));
 	auto* WriteBothEvent = NewEvent(TEXT("WriteBoth"));
 	auto* ReadOngoingEvent = NewEvent(TEXT("ReadOngoing"));
+	auto* ReadFieldsOnlyEvent = NewEvent(TEXT("ReadFieldsWithoutValid"));
 	auto* BirthColor = SetObserved(ObservedColor);
 	auto* OngoingColor = SetObserved(ObservedColor);
 	auto* EmptyColor = SetObserved(ObservedColor);
 	auto* FieldsProbe = SetObserved(ObservedFields);
+	auto* ColorBranch = SetObserved(AppliedColor);
+	auto* MotionBranch = SetObserved(AppliedTransform);
+	auto* FieldsOnlyColor = SetObserved(AppliedColor);
+	auto* FieldsOnlyMotion = SetObserved(AppliedTransform);
 	const FName Exec = UEdGraphSchema_K2::PN_Execute;
 	const FName Then = UEdGraphSchema_K2::PN_Then;
 	// Connect pins *before* mode switching, as a Blueprint developer can do.
@@ -234,6 +266,7 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 		!Wire(ReadBirth->FindPin(TEXT("Valid")), BirthColor->FindPin(Exec)) ||
 		!Wire(ReadBirth->FindPin(ColorPin), BirthColor->FindPin(ObservedColor)) ||
 		!Wire(ReadBirth->FindPin(TEXT("FieldsToApply")), FieldsProbe->FindPin(ObservedFields)) ||
+		!Wire(ReadBirth->FindPin(ApplyColorPin), ColorBranch->FindPin(Exec)) ||
 		!Wire(WriteBothEvent->FindPin(Then), WriteBirth->FindPin(Exec)) ||
 		!Wire(WriteBirth->FindPin(Then), WriteOngoing->FindPin(Exec)))
 	{
@@ -248,6 +281,8 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 		ReadBirth->FindPinChecked(Exec)->LinkedTo.Contains(ReadBirthEvent->FindPinChecked(Then)));
 	TestTrue(TEXT("Switching to Initial removes the received-only mask and its wire"),
 		!ReadBirth->FindPin(TEXT("FieldsToApply")) && FieldsProbe->FindPinChecked(ObservedFields)->LinkedTo.IsEmpty());
+	TestTrue(TEXT("Initial removes field exec outputs, including a previously wired one"),
+		!ReadBirth->FindPin(ApplyColorPin) && !ReadBirth->FindPin(ApplyMotionPin) && ColorBranch->FindPinChecked(Exec)->LinkedTo.IsEmpty());
 	Schema->TrySetDefaultValue(*EmptyColor->FindPinChecked(ObservedColor), TEXT("-1,-1,-1"));
 	auto* BeginPlay = FBlueprintEditorUtils::FindOverrideForFunction(Blueprint, AActor::StaticClass(), TEXT("ReceiveBeginPlay"));
 	if (!BeginPlay)
@@ -273,6 +308,15 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 		!Wire(ReadOngoing->FindPin(TEXT("NoValidPayload")), EmptyColor->FindPin(Exec)) ||
 		!Wire(ReadOngoing->FindPin(TEXT("Valid")), OngoingColor->FindPin(Exec)) ||
 		!Wire(ReadOngoing->FindPin(ColorPin), OngoingColor->FindPin(ObservedColor)) ||
+		!Wire(ReadOngoing->FindPin(ApplyColorPin), ColorBranch->FindPin(Exec)) ||
+		!Wire(ReadOngoing->FindPin(ColorPin), ColorBranch->FindPin(AppliedColor)) ||
+		!Wire(ReadOngoing->FindPin(ApplyMotionPin), MotionBranch->FindPin(Exec)) ||
+		!Wire(ReadOngoing->FindPin(MotionPin), MotionBranch->FindPin(AppliedTransform)) ||
+		!Wire(ReadFieldsOnlyEvent->FindPin(Then), ReadFieldsOnly->FindPin(Exec)) ||
+		!Wire(ReadFieldsOnly->FindPin(ApplyColorPin), FieldsOnlyColor->FindPin(Exec)) ||
+		!Wire(ReadFieldsOnly->FindPin(ColorPin), FieldsOnlyColor->FindPin(AppliedColor)) ||
+		!Wire(ReadFieldsOnly->FindPin(ApplyMotionPin), FieldsOnlyMotion->FindPin(Exec)) ||
+		!Wire(ReadFieldsOnly->FindPin(MotionPin), FieldsOnlyMotion->FindPin(AppliedTransform)) ||
 		!Wire(OngoingColor->FindPin(Then), FieldsProbe->FindPin(Exec)) ||
 		!Wire(ReadOngoing->FindPin(TEXT("FieldsToApply")), FieldsProbe->FindPin(ObservedFields)))
 	{
@@ -287,6 +331,12 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 		{
 			if (Candidate->NodeGuid == Guid)
 			{
+				if (ExpectedClass == UK2Node_ReadSyncPayload::StaticClass() &&
+					!TestTrue(TEXT("Upgrading a saved legacy read adds the field execution pins"),
+						Candidate->FindPin(ApplyColorPin, EGPD_Output) && Candidate->FindPin(ApplyMotionPin, EGPD_Output)))
+				{
+					return false;
+				}
 				const auto* Mode = Candidate->FindPin(TEXT("Mode"));
 				return TestTrue(*FString::Printf(TEXT("Retired node upgrades to %s / %s"), *ExpectedClass->GetName(), ExpectedMode),
 					Candidate->GetClass() == ExpectedClass && Mode && Mode->DefaultValue == ExpectedMode);
@@ -363,8 +413,18 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("Temporary mirror"), Mirror)) { return false; }
 	const auto* ResultColor = FindFProperty<FStructProperty>(Blueprint->GeneratedClass, ObservedColor);
 	const auto* ResultFields = FindFProperty<FArrayProperty>(Blueprint->GeneratedClass, ObservedFields);
+	const auto* ColorBranchProperty = FindFProperty<FStructProperty>(Blueprint->GeneratedClass, AppliedColor);
+	const auto* MotionBranchProperty = FindFProperty<FStructProperty>(Blueprint->GeneratedClass, AppliedTransform);
 	if (!TestNotNull(TEXT("Compiled color probe"), ResultColor) ||
-		!TestNotNull(TEXT("Compiled field mask probe"), ResultFields)) { return false; }
+		!TestNotNull(TEXT("Compiled field mask probe"), ResultFields) ||
+		!TestNotNull(TEXT("Compiled color branch probe"), ColorBranchProperty) ||
+		!TestNotNull(TEXT("Compiled motion branch probe"), MotionBranchProperty)) { return false; }
+	FVector* AppliedMirrorColor = ColorBranchProperty->ContainerPtrToValuePtr<FVector>(Mirror);
+	FTransform* AppliedMirrorMotion = MotionBranchProperty->ContainerPtrToValuePtr<FTransform>(Mirror);
+	const FVector UnappliedColor(-7);
+	const FTransform LocalHeldMotion(FVector(97, 0, 0));
+	*AppliedMirrorColor = UnappliedColor;
+	*AppliedMirrorMotion = LocalHeldMotion;
 	auto ReadColor = [Mirror, ResultColor]() { return *ResultColor->ContainerPtrToValuePtr<FVector>(Mirror); };
 	Mirror->ProcessEvent(Mirror->FindFunctionChecked(TEXT("ReadBirth")), nullptr);
 	TestTrue(TEXT("Missing birth data uses No Valid Payload"), ReadColor().Equals(FVector(-1)));
@@ -381,6 +441,8 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	Mirror->bReceiveDataFromPeer = true;
 	Mirror->ProcessEvent(Mirror->FindFunctionChecked(TEXT("ReadOngoing")), nullptr);
 	TestTrue(TEXT("Received has no value before confirmation"), ReadColor().Equals(FVector(-1)));
+	TestTrue(TEXT("No Valid Payload does not run any field execution path"),
+		AppliedMirrorColor->Equals(UnappliedColor) && AppliedMirrorMotion->Equals(LocalHeldMotion));
 	if (!TestTrue(TEXT("Deliver blue to the mirror"), Mirror->ApplyConfirmedSyncField(ColorName, LatestBytes, true))) { return false; }
 	Mirror->ProcessEvent(Mirror->FindFunctionChecked(TEXT("ReadBirth")), nullptr);
 	TestTrue(TEXT("Reading Initial again still returns red after live blue arrives"), ReadColor().Equals(FVector(1, 0, 0)));
@@ -388,8 +450,16 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	// The received mask can be reread in the same frame. A later frame proves Initial never consumed it.
 	const uint64 ReadFrame = GFrameCounter;
 	const FName AuthoredColor(*Color->GetAuthoredName());
+	const FName MotionName = Motion->GetFName();
+	const FTransform NetworkMotion(FVector(12, 0, 0));
+	FInstancedStruct Sample;
+	Sample.InitializeAs(PayloadType);
+	*Motion->ContainerPtrToValuePtr<FTransform>(Sample.GetMutableMemory()) = NetworkMotion;
+	TArray<uint8> MotionBytes;
+	if (!TestTrue(TEXT("Prepare a distinct network transform for the echo and remote update cases"),
+		Actor->PrepareOutgoingPayloadInternal(Sample) && Actor->GetPreparedSyncField(MotionName, MotionBytes))) { return false; }
 	bFinishNextFrame = true;
-	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([this, World, Actor, Mirror, ReadFrame, ReadColor, ColorName, AuthoredColor, ResultFields]()
+	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([=, this]()
 	{
 		if (GFrameCounter == ReadFrame) { return false; }
 		FEditorScriptExecutionGuard Script;
@@ -401,9 +471,11 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 		Mirror->SetSyncActorID(6);
 		Mirror->SyncSubsystem->RegisterSyncActor(Mirror);
 		ResultFields->ContainerPtrToValuePtr<TArray<FName>>(Mirror)->Reset();
+		*AppliedMirrorColor = UnappliedColor;
 		TArray<uint8> Red;
-		if (TestTrue(TEXT("Confirm a new color for the registered mirror"),
-			Mirror->GetInitialSyncField(ColorName, Red) && Mirror->ApplyConfirmedSyncField(ColorName, Red, true)))
+		if (TestTrue(TEXT("Confirm remote color and acknowledge locally controlled motion"),
+			Mirror->GetInitialSyncField(ColorName, Red) && Mirror->ApplyConfirmedSyncField(ColorName, Red, true) &&
+			Mirror->ApplyConfirmedSyncField(MotionName, MotionBytes, false)))
 		{
 			TestTrue(TEXT("The mirror waits for its notification before changing color"), ReadColor().Equals(FVector(0, 0, 1)));
 			// Dispatch through the subsystem. Only the compiled receive event can update this Blueprint variable.
@@ -411,6 +483,36 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("The actor's receive event read the new confirmed color"), ReadColor().Equals(FVector(1, 0, 0)));
 			TestTrue(TEXT("Fields To Apply is available inside the actor's receive event"),
 				ResultFields->ContainerPtrToValuePtr<TArray<FName>>(Mirror)->Contains(AuthoredColor));
+			TestTrue(TEXT("Only Apply Color runs while this device holds the transform"),
+				AppliedMirrorColor->Equals(FVector(1, 0, 0)) && AppliedMirrorMotion->Equals(LocalHeldMotion));
+
+			*AppliedMirrorColor = UnappliedColor;
+			Mirror->ApplyConfirmedSyncField(MotionName, MotionBytes, true);
+			Mirror->SyncSubsystem->Tick(0.f);
+			TestTrue(TEXT("Only Apply Transform runs for a remote transform in a new batch"),
+				AppliedMirrorMotion->Equals(NetworkMotion) && AppliedMirrorColor->Equals(UnappliedColor));
+
+			*AppliedMirrorMotion = LocalHeldMotion;
+			Mirror->ApplyConfirmedSyncField(MotionName, MotionBytes, true);
+			Mirror->ApplyConfirmedSyncField(ColorName, Red, true);
+			Mirror->SyncSubsystem->Tick(0.f);
+			TestTrue(TEXT("One receive event applies both typed values when both fields are in its mask"),
+				AppliedMirrorMotion->Equals(NetworkMotion) && AppliedMirrorColor->Equals(FVector(1, 0, 0)));
+
+			Mirror->ClearSyncFieldToApply(MotionName);
+			Mirror->ClearSyncFieldToApply(ColorName);
+			*ResultColor->ContainerPtrToValuePtr<FVector>(Mirror) = UnappliedColor;
+			*AppliedMirrorColor = UnappliedColor;
+			*AppliedMirrorMotion = LocalHeldMotion;
+			Mirror->ProcessEvent(Mirror->FindFunctionChecked(TEXT("ReadOngoing")), nullptr);
+			TestTrue(TEXT("Valid still runs for a confirmed payload with an empty mask, with neither field branch"),
+				ReadColor().Equals(FVector(1, 0, 0)) && AppliedMirrorColor->Equals(UnappliedColor) && AppliedMirrorMotion->Equals(LocalHeldMotion));
+
+			Mirror->ApplyConfirmedSyncField(MotionName, MotionBytes, true);
+			Mirror->ApplyConfirmedSyncField(ColorName, Red, true);
+			Mirror->ProcessEvent(Mirror->FindFunctionChecked(TEXT("ReadFieldsWithoutValid")), nullptr);
+			TestTrue(TEXT("Both Apply outputs execute on a read node with no Valid wire"),
+				AppliedMirrorMotion->Equals(NetworkMotion) && AppliedMirrorColor->Equals(FVector(1, 0, 0)));
 		}
 		World->DestroyWorld(false);
 		return true;

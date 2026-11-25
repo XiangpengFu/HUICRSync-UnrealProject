@@ -26,6 +26,7 @@ class UK2Node_HUICRSyncPayload : public UK2Node
 
 public:
 	virtual void AllocateDefaultPins() override;
+	virtual void PostLoad() override;
 	virtual void ConvertDeprecatedNode(UEdGraph* Graph, bool bOnlySafeChanges) override;
 	virtual void ExpandNode(FKismetCompilerContext& Compiler, UEdGraph* SourceGraph) override;
 	virtual void PinDefaultValueChanged(UEdGraphPin* Pin) override;
@@ -38,11 +39,13 @@ public:
 	UScriptStruct* ResolvePayloadStruct() const;
 	void GetFieldChoices(TArray<TSharedPtr<FName>>& Choices) const;
 	static FName MemberPinName(FName PropertyName);
+	static FName FieldExecPinName(FName PropertyName);
 
 protected:
 	bool IsReadNode() const;
 	bool UsesInitialPayload() const;
 	void AddModePin();
+	void AddMissingFieldExecPins();
 
 	UPROPERTY()
 	bool bInitialMode = false;
