@@ -78,6 +78,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload", meta = (BlueprintInternalUseOnly = "true"))
 	bool ReadReceivedPayloadInternal(FInstancedStruct& Payload, TArray<FName>& FieldsToApply);
 
+	/** Read Sync Payload (Received) here to apply this actor's newly confirmed fields on this device. */
+	UFUNCTION(BlueprintNativeEvent, Category = "HUICR Sync|Payload", meta = (DisplayName = "On Sync Fields Received"))
+	void OnSyncFieldsReceived();
+	virtual void OnSyncFieldsReceived_Implementation() {}
+
 	bool GetPreparedSyncField(FName Field, TArray<uint8>& OutBytes) const;
 	bool GetInitialSyncField(FName Field, TArray<uint8>& OutBytes) const;
 	bool ValidateSyncField(FName Field, const TArray<uint8>* OptionalBytes = nullptr) const;
@@ -126,6 +131,10 @@ protected:
 	void HandleCalibrationStateChanged(bool bNewCalibrationState);
 
 private:
+	friend class UHUICRSyncSubsystem;
+	// Present only while the actor's event is running, even if a separate reader already polled the update.
+	TArray<FName>* FieldsInReceiveEvent = nullptr;
+
 	UPROPERTY(Transient)
 	FInstancedStruct PreparedFields;
 

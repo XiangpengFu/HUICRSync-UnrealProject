@@ -398,6 +398,7 @@ public:
 		const FHUICRSyncGuestActorMapping& GuestMapping);
 
 private:
+	friend class AHUICRSyncActor;
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FHUICRSyncCalibrationTest;
 #endif
@@ -503,6 +504,9 @@ private:
 	TArray<FEarlyFieldRequest> EarlyFieldRequests;
 	TMap<int32, FFieldActorState> FieldActors;
 	bool bFieldReceivePending = false;
+	TMap<TWeakObjectPtr<AHUICRSyncActor>, TArray<FName>> PendingActorFieldEvents;
+	bool bDispatchingActorFieldEvents = false;
+	void DispatchActorFieldEvents();
 	uint64 NextFieldVersion = 0;
 	uint32 NextFieldRequest = 0;
 	static constexpr uint32 FieldPacketMagic = 0x48554644; // HUFD

@@ -208,8 +208,14 @@ bool UHUICRSyncSubsystem::InitializeSenderSocket(const FString& InRemoteIpAddres
 
 void UHUICRSyncSubsystem::ReceiveData()
 {
+	// A receive-event Blueprint may call ReceiveData. Finish this batch before draining the socket again.
+	if (bDispatchingActorFieldEvents)
+	{
+		return;
+	}
 	if (!ReceiverSocket)
 	{
+		DispatchActorFieldEvents();
 		return;
 	}
 
@@ -487,6 +493,7 @@ void UHUICRSyncSubsystem::ReceiveData()
 		}
 	}
 
+	DispatchActorFieldEvents();
 	if (bReceivedAnyData || bFieldReceivePending)
 	{
 		bFieldReceivePending = false;
@@ -939,6 +946,7 @@ bool UHUICRSyncSubsystem::RegisterSyncActor(AHUICRSyncActor* SyncActor)
 
 void UHUICRSyncSubsystem::UnregisterSyncActor(AHUICRSyncActor* SyncActor)
 {
+	PendingActorFieldEvents.Remove(SyncActor);
 	if (!IsValid(SyncActor) || SyncActor->ActorID < 0)
 	{
 		return;
@@ -1232,6 +1240,7 @@ void UHUICRSyncSubsystem::StopSync()
 	DestroySockets();
 	EarlyFieldRequests.Reset();
 	bFieldReceivePending = false;
+	PendingActorFieldEvents.Reset();
 
 	ResetCalibrationSession();
 	Peers.Empty();

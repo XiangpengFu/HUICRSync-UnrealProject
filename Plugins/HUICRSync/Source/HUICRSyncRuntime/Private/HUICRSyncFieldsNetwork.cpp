@@ -445,6 +445,32 @@ void UHUICRSyncSubsystem::QueueFieldSnapshot(FHUICRSyncPeerRuntimeState& Peer, c
 	}
 }
 
+void UHUICRSyncSubsystem::DispatchActorFieldEvents()
+{
+	if (PendingActorFieldEvents.IsEmpty())
+	{
+		return;
+	}
+	TGuardValue<bool> Dispatching(bDispatchingActorFieldEvents, true);
+	// A Blueprint callback can destroy another actor, take ownership, or queue a new update.
+	// Snapshot just the keys. Take each actor's still-applicable fields immediately before calling it.
+	TArray<TWeakObjectPtr<AHUICRSyncActor>> Actors;
+	PendingActorFieldEvents.GenerateKeyArray(Actors);
+	for (const TWeakObjectPtr<AHUICRSyncActor>& Key : Actors)
+	{
+		TArray<FName> Fields;
+		AHUICRSyncActor* Actor = Key.Get();
+		if (PendingActorFieldEvents.RemoveAndCopyValue(Key, Fields) && !Fields.IsEmpty() && Actor && !Actor->IsActorBeingDestroyed() &&
+			Actor->bReceiveDataFromPeer && Actor->SharedPayloadStruct &&
+			Actor->ConfirmedFields.GetScriptStruct() == Actor->SharedPayloadStruct &&
+			Actor == FindSyncActor(Actor->TypeCode, Actor->ActorID))
+		{
+			TGuardValue<TArray<FName>*> EventFields(Actor->FieldsInReceiveEvent, &Fields);
+			Actor->OnSyncFieldsReceived();
+		}
+	}
+}
+
 void UHUICRSyncSubsystem::TickSyncFields()
 {
 	using namespace HUICRSharedFields;

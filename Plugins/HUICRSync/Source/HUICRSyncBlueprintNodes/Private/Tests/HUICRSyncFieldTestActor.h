@@ -25,4 +25,25 @@ public:
 
 	TArray<uint8> InitialBytesAtConstruction;
 	bool bSetConstructionDefault = false;
+
+	virtual void OnSyncFieldsReceived_Implementation() override
+	{
+		++ReceiveEventCount;
+		if (ReadReceivedPayloadInternal(LastEventPayload, LastEventFields) &&
+			LastEventFields.Contains(GET_MEMBER_NAME_CHECKED(FHUICRSyncScreenPayload, ScreenID)))
+		{
+			AppliedColorIndex = LastEventPayload.Get<FHUICRSyncScreenPayload>().ScreenID;
+		}
+	}
+
+	bool EventReadState(double X, int32 ColorIndex) const
+	{
+		const auto* Value = LastEventPayload.GetPtr<FHUICRSyncScreenPayload>();
+		return Value && FMath::IsNearlyEqual(Value->Transform.GetLocation().X, X) && Value->ScreenID == ColorIndex;
+	}
+
+	int32 ReceiveEventCount = 0;
+	int32 AppliedColorIndex = INDEX_NONE;
+	FInstancedStruct LastEventPayload;
+	TArray<FName> LastEventFields;
 };

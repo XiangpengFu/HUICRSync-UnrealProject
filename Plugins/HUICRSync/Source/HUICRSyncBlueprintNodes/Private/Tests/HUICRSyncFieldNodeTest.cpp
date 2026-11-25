@@ -221,7 +221,12 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 		int32 Y = 0;
 		BeginPlay = FKismetEditorUtilities::AddDefaultEventNode(Blueprint, Graph, TEXT("ReceiveBeginPlay"), AActor::StaticClass(), Y);
 	}
+	int32 EventY = 0;
+	auto* FieldsReceived = FKismetEditorUtilities::AddDefaultEventNode(Blueprint, Graph,
+		GET_FUNCTION_NAME_CHECKED(AHUICRSyncActor, OnSyncFieldsReceived), AHUICRSyncActor::StaticClass(), EventY);
 	if (!TestNotNull(TEXT("Actual Blueprint BeginPlay"), BeginPlay) ||
+		!TestNotNull(TEXT("Sync Actor exposes its own receive event to the graph"), FieldsReceived) ||
+		!Wire(FieldsReceived->FindPin(Then), ReadOngoing->FindPin(Exec)) ||
 		!Wire(BeginPlay->FindPin(Then), ReadBirth->FindPin(Exec)) ||
 		!Wire(ReadBirth->FindPin(TEXT("NoValidPayload")), EmptyColor->FindPin(Exec)) ||
 		!Wire(ReadOngoingEvent->FindPin(Then), ReadOngoing->FindPin(Exec)) ||
@@ -344,7 +349,7 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	const uint64 ReadFrame = GFrameCounter;
 	const FName AuthoredColor(*Color->GetAuthoredName());
 	bFinishNextFrame = true;
-	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([this, World, Mirror, ReadFrame, ReadColor, AuthoredColor, ResultFields]()
+	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([this, World, Actor, Mirror, ReadFrame, ReadColor, ColorName, AuthoredColor, ResultFields]()
 	{
 		if (GFrameCounter == ReadFrame) { return false; }
 		FEditorScriptExecutionGuard Script;
@@ -352,6 +357,21 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Read Received returns the newer blue"), ReadColor().Equals(FVector(0, 0, 1)));
 		TestTrue(TEXT("Read Initial did not consume the pending live color"),
 			ResultFields->ContainerPtrToValuePtr<TArray<FName>>(Mirror)->Contains(AuthoredColor));
+		Mirror->SyncSubsystem = Actor->SyncSubsystem;
+		Mirror->SetSyncActorID(6);
+		Mirror->SyncSubsystem->RegisterSyncActor(Mirror);
+		ResultFields->ContainerPtrToValuePtr<TArray<FName>>(Mirror)->Reset();
+		TArray<uint8> Red;
+		if (TestTrue(TEXT("Confirm a new color for the registered mirror"),
+			Mirror->GetInitialSyncField(ColorName, Red) && Mirror->ApplyConfirmedSyncField(ColorName, Red, true)))
+		{
+			TestTrue(TEXT("The mirror waits for its notification before changing color"), ReadColor().Equals(FVector(0, 0, 1)));
+			// Dispatch through the subsystem. Only the compiled receive event can update this Blueprint variable.
+			Mirror->SyncSubsystem->Tick(0.f);
+			TestTrue(TEXT("The actor's receive event read the new confirmed color"), ReadColor().Equals(FVector(1, 0, 0)));
+			TestTrue(TEXT("Fields To Apply is available inside the actor's receive event"),
+				ResultFields->ContainerPtrToValuePtr<TArray<FName>>(Mirror)->Contains(AuthoredColor));
+		}
 		World->DestroyWorld(false);
 		return true;
 	}));

@@ -232,11 +232,14 @@ bool AHUICRSyncActor::ApplyConfirmedSyncField(FName Field, const TArray<uint8>& 
 	if (bApplyLocally && bReceiveDataFromPeer)
 	{
 		UnreadFields.AddUnique(AuthoredName);
+		if (SyncSubsystem)
+		{
+			SyncSubsystem->PendingActorFieldEvents.FindOrAdd(this).AddUnique(AuthoredName);
+		}
 	}
 	else
 	{
-		UnreadFields.Remove(AuthoredName);
-		LastReadFields.Remove(AuthoredName);
+		ClearSyncFieldToApply(Field);
 	}
 	if (bReceiveDataFromPeer && HUICRSyncFields::CanUseLegacyBytes(SharedPayloadStruct))
 	{
@@ -252,11 +255,34 @@ void AHUICRSyncActor::ClearSyncFieldToApply(FName Field)
 		const FName AuthoredName(*Property->GetAuthoredName());
 		UnreadFields.Remove(AuthoredName);
 		LastReadFields.Remove(AuthoredName);
+		if (FieldsInReceiveEvent)
+		{
+			FieldsInReceiveEvent->Remove(AuthoredName);
+		}
+		if (SyncSubsystem)
+		{
+			if (TArray<FName>* Pending = SyncSubsystem->PendingActorFieldEvents.Find(this))
+			{
+				Pending->Remove(AuthoredName);
+				if (Pending->IsEmpty())
+				{
+					SyncSubsystem->PendingActorFieldEvents.Remove(this);
+				}
+			}
+		}
 	}
 }
 
 void AHUICRSyncActor::ResetConfirmedSyncFields()
 {
+	if (SyncSubsystem)
+	{
+		SyncSubsystem->PendingActorFieldEvents.Remove(this);
+	}
+	if (FieldsInReceiveEvent)
+	{
+		FieldsInReceiveEvent->Reset();
+	}
 	if (SharedPayloadStruct)
 	{
 		ActorReceivePayloadData.Reset();
@@ -285,7 +311,8 @@ bool AHUICRSyncActor::ReadReceivedPayloadInternal(FInstancedStruct& Payload, TAr
 		LastReadFields.AddUnique(Field);
 	}
 	UnreadFields.Reset();
-	FieldsToApply = LastReadFields;
+	// An event describes its own receive batch. Ordinary polling keeps its existing per-frame mask.
+	FieldsToApply = FieldsInReceiveEvent ? *FieldsInReceiveEvent : LastReadFields;
 	Payload = ConfirmedFields;
 	return true;
 }
@@ -362,7 +389,10 @@ void AHUICRSyncActor::BeginPlay()
 		}
 		BeginPlayFieldRequests.Reset();
 		SyncSubsystem->OnPrepareNetDataSend.AddDynamic(this, &AHUICRSyncActor::HandlePrepareNetDataSend);
-		SyncSubsystem->OnNetDataReceived.AddDynamic(this, &AHUICRSyncActor::HandleNetDataReceived);
+		if (!SharedPayloadStruct)
+		{
+			SyncSubsystem->OnNetDataReceived.AddDynamic(this, &AHUICRSyncActor::HandleNetDataReceived);
+		}
 		SyncSubsystem->OnCalibrationStateChanged.AddDynamic(this, &AHUICRSyncActor::HandleCalibrationStateChanged);
 		HandleCalibrationStateChanged(SyncSubsystem->bCalibrationState);
 	}

@@ -16,6 +16,7 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/Crc.h"
 #include "Misc/ScopeExit.h"
+#include "UObject/Script.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHUICRSyncSharedFieldsTest, "HUICRSync.Network.SharedFields",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -27,6 +28,7 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 	auto* World = UWorld::CreateWorld(EWorldType::Game, false, *MapName, Package);
 	if (!TestNotNull(TEXT("Field test world"), World)) { return false; }
 	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+	FEditorScriptExecutionGuard AllowActorEvents;
 	auto* PayloadType = FHUICRSyncScreenPayload::StaticStruct();
 	TArray<UHUICRSyncSubsystem*> Sessions;
 	TArray<FString> SaveSlots;
@@ -129,7 +131,7 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 	PC->RegisterSyncActor(Ball);
 	auto Mirror = [Ball](AHUICRSyncHMDManagerBase* Manager)
 	{
-		return Manager->SyncSubsystem->FindSyncActor(Ball->TypeCode, Ball->ActorID);
+		return Cast<AHUICRSyncFieldTestActor>(Manager->SyncSubsystem->FindSyncActor(Ball->TypeCode, Ball->ActorID));
 	};
 	auto Connect = [&](AHUICRSyncHMDManagerBase* Manager)
 	{
@@ -179,11 +181,13 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	const int32 PCEventsBeforeLocalMotion = Ball->ReceiveEventCount;
 	Ball->PrepareOutgoingPayloadInternal(Sample(12, 99));
 	if (!WaitFor(TEXT("PC drives motion; initial scalar is preserved on A"), [&] { return IsState(Mirror(A), 12, 1); }))
 	{
 		return false;
 	}
+	TestEqual(TEXT("PC does not notify its own continuous motion source"), Ball->ReceiveEventCount, PCEventsBeforeLocalMotion);
 	auto* BallA = Mirror(A);
 	BallA->PrepareOutgoingPayloadInternal(Sample(22, 8));
 	if (!TestTrue(TEXT("First headset takes motion"), BallA->SetSyncFieldSourceInternal(Motion, Follow, {})) ||
@@ -196,15 +200,35 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 	auto* BallB = Mirror(B);
 	if (!TestTrue(TEXT("Late guest keeps birth payload separate from the newer motion snapshot"),
 		BallB->ActorInitPayloadData == Ball->ActorInitPayloadData &&
-		CastChecked<AHUICRSyncFieldTestActor>(BallB)->InitialBytesAtConstruction == Ball->ActorInitPayloadData))
+		BallB->InitialBytesAtConstruction == Ball->ActorInitPayloadData))
 	{
 		return false;
 	}
+	auto* OtherB = Cast<AHUICRSyncFieldTestActor>(B->SyncSubsystem->FindSyncActor(Spawned->TypeCode, Spawned->ActorID));
+	if (!TestNotNull(TEXT("A second independent actor exists on B"), OtherB) ||
+		!WaitFor(TEXT("Both late-join mirrors can read their snapshot inside their own events"), [&]
+		{ return BallB->EventReadState(22, 1) && OtherB->EventReadState(41, 9); }))
+	{
+		return false;
+	}
+	const int32 LocalEvents = BallA->ReceiveEventCount;
+	const int32 RemoteEvents = BallB->ReceiveEventCount;
+	const int32 UnrelatedEvents = OtherB->ReceiveEventCount;
+	BallA->PrepareOutgoingPayloadInternal(Sample(24, 4));
+	if (!WaitFor(TEXT("Only PC and B need to apply A's new motion"), [&]
+		{ return Ball->EventReadState(24, 1) && BallB->EventReadState(24, 1) && IsState(BallA, 24, 1); }))
+	{
+		return false;
+	}
+	TestEqual(TEXT("A's own confirmed motion does not fire its receive event"), BallA->ReceiveEventCount, LocalEvents);
+	TestEqual(TEXT("One motion update notifies B's ball once"), BallB->ReceiveEventCount, RemoteEvents + 1);
+	TestEqual(TEXT("B's other actor did not receive the ball's event"), OtherB->ReceiveEventCount, UnrelatedEvents);
 	BallB->PrepareOutgoingPayloadInternal(Sample(30, 7));
 	BallB->SetSyncFieldSourceInternal(Color, Fixed, Sample(900, 2));
 	BallA->PrepareOutgoingPayloadInternal(Sample(25, 4));
 	if (!WaitFor(TEXT("A moves while guest B independently sets color"), [&]
-		{ return IsState(Ball, 25, 2) && IsState(BallA, 25, 2) && IsState(BallB, 25, 2); }))
+		{ return IsState(Ball, 25, 2) && IsState(BallA, 25, 2) && BallB->EventReadState(25, 2) &&
+			BallA->AppliedColorIndex == 2 && BallB->AppliedColorIndex == 2; }))
 	{
 		return false;
 	}
@@ -212,6 +236,30 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 	TArray<FName> Mask;
 	BallA->ReadReceivedPayloadInternal(State, Mask);
 	TestFalse(TEXT("An echo cannot move the local motion writer"), Mask.Contains(Motion));
+	const int32 EventsBeforeBatch = Spawned->ReceiveEventCount;
+	Spawned->SetSyncFieldSourceInternal(Motion, Fixed, Sample(52, 0));
+	Spawned->SetSyncFieldSourceInternal(Color, Fixed, Sample(0, 3));
+	if (!WaitFor(TEXT("A local fixed-value batch is readable inside the PC actor's event"), [&]
+		{ return Spawned->EventReadState(52, 3) && Spawned->LastEventFields.Contains(Motion) &&
+			Spawned->LastEventFields.Contains(Color); }))
+	{
+		return false;
+	}
+	TestEqual(TEXT("Two fields ready together notify their actor once"), Spawned->ReceiveEventCount, EventsBeforeBatch + 1);
+	// Multiple subsystem ticks in this synchronous test share the engine frame.
+	Spawned->SetSyncFieldSourceInternal(Color, Fixed, Sample(0, 8));
+	PC->Tick(.01f);
+	TestEqual(TEXT("A second batch in the same engine frame fires its own event"), Spawned->ReceiveEventCount, EventsBeforeBatch + 2);
+	TestTrue(TEXT("The second event exposes only its color, without the previous batch's motion"),
+		Spawned->EventReadState(52, 8) && Spawned->LastEventFields.Num() == 1 && Spawned->LastEventFields.Contains(Color));
+	Spawned->bReceiveDataFromPeer = false;
+	Spawned->SetSyncFieldSourceInternal(Color, Fixed, Sample(0, 4));
+	if (!WaitFor(TEXT("Other receivers still apply an update while PC actor reception is off"), [&]
+		{ return OtherB->EventReadState(52, 4); }))
+	{
+		return false;
+	}
+	TestEqual(TEXT("A receive-disabled actor gets no local event"), Spawned->ReceiveEventCount, EventsBeforeBatch + 2);
 	BallB->SetSyncFieldSourceInternal(Motion, Follow, {});
 	if (!WaitFor(TEXT("B takes motion without A releasing"), [&] { return IsState(BallA, 30, 2); }))
 	{
@@ -251,6 +299,26 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	const int32 BeforeCancel = FromDefaults->ReceiveEventCount;
+	if (!TestTrue(TEXT("Schedule a fixed color then retake it before delivery"),
+		FromDefaults->SetSyncFieldSourceInternal(Color, Fixed, Sample(0, 5)) &&
+		FromDefaults->SetSyncFieldSourceInternal(Color, Follow, {}))) { return false; }
+	PC->Tick(.01f);
+	TestEqual(TEXT("Retaking the only pending field cancels the actor event"), FromDefaults->ReceiveEventCount, BeforeCancel);
+
+	if (!TestTrue(TEXT("Queue color before unregistering"), FromDefaults->SetSyncFieldSourceInternal(Color, Fixed, Sample(0, 6))))
+	{
+		return false;
+	}
+	PC->UnregisterSyncActor(FromDefaults);
+	auto* Replacement = World->SpawnActor<AHUICRSyncFieldTestActor>();
+	if (!TestNotNull(TEXT("Replacement for the old actor ID"), Replacement)) { return false; }
+	Replacement->SyncSubsystem = PC;
+	Replacement->SetSyncActorID(FromDefaults->ActorID);
+	if (!TestTrue(TEXT("Register new actor under the old ID"), PC->RegisterSyncActor(Replacement))) { return false; }
+	PC->Tick(.01f);
+	TestEqual(TEXT("An unregistered object gets no deferred event"), FromDefaults->ReceiveEventCount, BeforeCancel);
+	TestEqual(TEXT("An actor reusing its ID does not inherit its pending event"), Replacement->ReceiveEventCount, 0);
 	return !HasAnyErrors();
 }
 #endif
