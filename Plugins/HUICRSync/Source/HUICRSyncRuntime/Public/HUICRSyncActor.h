@@ -79,6 +79,15 @@ public:
 	bool ReadReceivedPayloadInternal(FInstancedStruct& Payload, TArray<FName>& FieldsToApply);
 
 	/**
+	 * Fires once per active sync tick when this device supplies one or more of this actor's fields.
+	 * Fields To Prepare lists the fields confirmed by the PC to follow this device's payload.
+	 * Use Write Sync Payload (Current Local Values) here, before the plugin samples them.
+	 */
+	UFUNCTION(BlueprintNativeEvent, Category = "HUICR Sync|Payload", meta = (DisplayName = "On Prepare Sync Fields"))
+	void OnPrepareSyncFields(const TArray<FName>& FieldsToPrepare);
+	virtual void OnPrepareSyncFields_Implementation(const TArray<FName>& FieldsToPrepare) {}
+
+	/**
 	 * Fires once per receive batch when this Sync Actor has confirmed fields to apply on this device.
 	 * Use Read Sync Payload (Received) and check Fields To Apply.
 	 */

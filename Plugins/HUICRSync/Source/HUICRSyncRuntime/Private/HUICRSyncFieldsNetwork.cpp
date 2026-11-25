@@ -471,6 +471,31 @@ void UHUICRSyncSubsystem::DispatchActorFieldEvents()
 	}
 }
 
+void UHUICRSyncSubsystem::PrepareLocalActorFields(const FFieldActorState& State, int32 LocalWriter)
+{
+	AHUICRSyncActor* Actor = State.Actor.Get();
+	if (!Actor || !Actor->bSendDataToPeer || !Actor->SharedPayloadStruct || Actor->IsActorBeingDestroyed())
+	{
+		return;
+	}
+
+	TArray<FName> FieldsToPrepare;
+	for (const auto& Pair : State.Fields)
+	{
+		if (Pair.Value.Writer == LocalWriter)
+		{
+			if (const FProperty* Property = Actor->SharedPayloadStruct->FindPropertyByName(Pair.Key))
+			{
+				FieldsToPrepare.Emplace(*Property->GetAuthoredName());
+			}
+		}
+	}
+	if (!FieldsToPrepare.IsEmpty())
+	{
+		Actor->OnPrepareSyncFields(FieldsToPrepare);
+	}
+}
+
 void UHUICRSyncSubsystem::TickSyncFields()
 {
 	using namespace HUICRSharedFields;
@@ -488,16 +513,47 @@ void UHUICRSyncSubsystem::TickSyncFields()
 			}
 		}
 	}
-	if (!bManagedCalibration || !bConnectionState || bGameStopped)
-	{
-		return;
-	}
 	const bool bPC = Role == EHUICRSyncRole::PC;
-	FHUICRSyncPeerRuntimeState* Server = bPC ? nullptr : FindDefaultPeer();
-	if (!bPC && (!Server || !bLocalSceneReady))
+	const int32 LocalWriter = bPC ? 0 : LocalParticipantId;
+	const auto CanSync = [this, bPC, LocalWriter]()
+	{
+		return bManagedCalibration && bConnectionState && !bGameStopped &&
+			(bPC ? Role == EHUICRSyncRole::PC :
+				Role == EHUICRSyncRole::HMD && bLocalSceneReady && LocalWriter > 0 && LocalParticipantId == LocalWriter && FindDefaultPeer());
+	};
+	if (!CanSync())
 	{
 		return;
 	}
+	// Blueprint can destroy actors, change a field's writer, or end the session while preparing a sample.
+	const uint64 VersionBeforePrepare = NextFieldVersion;
+	TArray<TWeakObjectPtr<AHUICRSyncActor>, TInlineAllocator<16>> ActorsToPrepare;
+	for (const auto& Pair : FieldActors)
+	{
+		for (const auto& Field : Pair.Value.Fields)
+		{
+			if (Field.Value.Writer == LocalWriter)
+			{
+				ActorsToPrepare.Add(Pair.Value.Actor);
+				break;
+			}
+		}
+	}
+	for (const TWeakObjectPtr<AHUICRSyncActor>& Key : ActorsToPrepare)
+	{
+		AHUICRSyncActor* Actor = Key.Get();
+		const FFieldActorState* ActorState = Actor ? FieldActors.Find(Actor->ActorID) : nullptr;
+		if (ActorState && ActorState->Actor == Key)
+		{
+			PrepareLocalActorFields(*ActorState, LocalWriter);
+			if (!CanSync())
+			{
+				return;
+			}
+		}
+	}
+
+	FHUICRSyncPeerRuntimeState* Server = bPC ? nullptr : FindDefaultPeer();
 	const double Now = FPlatformTime::Seconds();
 	for (auto It = FieldActors.CreateIterator(); It; ++It)
 	{
@@ -513,7 +569,8 @@ void UHUICRSyncSubsystem::TickSyncFields()
 			FSharedField& Field = FieldPair.Value;
 			const FName FieldName = FieldPair.Key;
 			const FAddress Address { Actor->ActorID, ActorState.Instance, FieldName };
-			if (Field.Writer == (bPC ? 0 : LocalParticipantId))
+			// A PC Blueprint may have claimed a new field during preparation. Sample it on its first full tick.
+			if (Field.Writer == LocalWriter && (!bPC || Field.Epoch <= VersionBeforePrepare))
 			{
 				TArray<uint8> Sample;
 				if (Actor->GetPreparedSyncField(FieldName, Sample) && FitsDatagram(FieldName, Sample.Num(), MaxPacketBytes))

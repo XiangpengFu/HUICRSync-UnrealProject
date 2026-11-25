@@ -182,14 +182,20 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	const int32 PCEventsBeforeLocalMotion = Ball->ReceiveEventCount;
-	Ball->PrepareOutgoingPayloadInternal(Sample(12, 99));
+	const int32 PreparesBeforeLocalMotion = Ball->PrepareEventCount;
+	Ball->PayloadAtPrepare = Sample(12, 99);
+	PC->Tick(.01f);
+	TestEqual(TEXT("PC prepares once when it is the motion source"), Ball->PrepareEventCount, PreparesBeforeLocalMotion + 1);
+	TestTrue(TEXT("PC samples the newly prepared motion in that same tick, preserving fixed color"),
+		Ball->LastPrepareFields.Num() == 1 && Ball->LastPrepareFields.Contains(Motion) && IsState(Ball, 12, 1));
 	if (!WaitFor(TEXT("PC drives motion; initial scalar is preserved on A"), [&] { return IsState(Mirror(A), 12, 1); }))
 	{
 		return false;
 	}
 	TestEqual(TEXT("PC does not notify its own continuous motion source"), Ball->ReceiveEventCount, PCEventsBeforeLocalMotion);
 	auto* BallA = Mirror(A);
-	BallA->PrepareOutgoingPayloadInternal(Sample(22, 8));
+	TestEqual(TEXT("A does not prepare while the PC drives the ball"), BallA->PrepareEventCount, 0);
+	BallA->PayloadAtPrepare = Sample(22, 8);
 	if (!TestTrue(TEXT("First headset takes motion"), BallA->SetSyncFieldSourceInternal(Motion, Follow, {})) ||
 		!WaitFor(TEXT("PC receives only A's motion"), [&] { return IsState(Ball, 22, 1); }) ||
 		!Connect(B) || !Calibrate(B) ||
@@ -214,7 +220,8 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 	const int32 LocalEvents = BallA->ReceiveEventCount;
 	const int32 RemoteEvents = BallB->ReceiveEventCount;
 	const int32 UnrelatedEvents = OtherB->ReceiveEventCount;
-	BallA->PrepareOutgoingPayloadInternal(Sample(24, 4));
+	const int32 PCPreparesWhileRelaying = Ball->PrepareEventCount;
+	BallA->PayloadAtPrepare = Sample(24, 4);
 	if (!WaitFor(TEXT("Only PC and B need to apply A's new motion"), [&]
 		{ return Ball->EventReadState(24, 1) && BallB->EventReadState(24, 1) && IsState(BallA, 24, 1); }))
 	{
@@ -223,15 +230,25 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("A's own confirmed motion does not fire its receive event"), BallA->ReceiveEventCount, LocalEvents);
 	TestEqual(TEXT("One motion update notifies B's ball once"), BallB->ReceiveEventCount, RemoteEvents + 1);
 	TestEqual(TEXT("B's other actor did not receive the ball's event"), OtherB->ReceiveEventCount, UnrelatedEvents);
-	BallB->PrepareOutgoingPayloadInternal(Sample(30, 7));
+	TestTrue(TEXT("A's ball prepares only motion"), BallA->LastPrepareFields.Num() == 1 && BallA->LastPrepareFields.Contains(Motion));
+	TestEqual(TEXT("PC can relay A's motion without preparing that ball"), Ball->PrepareEventCount, PCPreparesWhileRelaying);
+	TestEqual(TEXT("The unrelated PC actor never prepared"), Spawned->PrepareEventCount, 0);
+	TestEqual(TEXT("An unrelated mirror never prepared"), OtherB->PrepareEventCount, 0);
+	const int32 APreparesBeforeDisable = BallA->PrepareEventCount;
+	BallA->bSendDataToPeer = false;
+	A->SyncSubsystem->Tick(.01f);
+	TestEqual(TEXT("Disabling this actor's send option skips its prepare event"), BallA->PrepareEventCount, APreparesBeforeDisable);
+	BallA->bSendDataToPeer = true;
+	BallB->PayloadAtPrepare = Sample(30, 7);
 	BallB->SetSyncFieldSourceInternal(Color, Fixed, Sample(900, 2));
-	BallA->PrepareOutgoingPayloadInternal(Sample(25, 4));
+	BallA->PayloadAtPrepare = Sample(25, 4);
 	if (!WaitFor(TEXT("A moves while guest B independently sets color"), [&]
 		{ return IsState(Ball, 25, 2) && IsState(BallA, 25, 2) && BallB->EventReadState(25, 2) &&
 			BallA->AppliedColorIndex == 2 && BallB->AppliedColorIndex == 2; }))
 	{
 		return false;
 	}
+	TestEqual(TEXT("Setting color once while A moves the ball never triggers preparation on B"), BallB->PrepareEventCount, 0);
 	FInstancedStruct State;
 	TArray<FName> Mask;
 	BallA->ReadReceivedPayloadInternal(State, Mask);
@@ -265,17 +282,24 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	BallA->PrepareOutgoingPayloadInternal(Sample(999, 999));
-	BallB->PrepareOutgoingPayloadInternal(Sample(34, 7));
+	const int32 APreparesAfterTakeover = BallA->PrepareEventCount;
+	BallA->PayloadAtPrepare = Sample(999, 999);
+	BallB->PayloadAtPrepare = Sample(34, 7);
 	if (!WaitFor(TEXT("Previous writer never overwrites motion or fixed color"), [&] { return IsState(Ball, 34, 2); }))
 	{
 		return false;
 	}
+	TestEqual(TEXT("A stops preparing once B's takeover reaches A"), BallA->PrepareEventCount, APreparesAfterTakeover);
 	BallB->SetSyncFieldSourceInternal(Color, Follow, {});
 	if (!WaitFor(TEXT("The same color field switches from fixed to continuous"), [&] { return IsState(BallA, 34, 7); }))
 	{
 		return false;
 	}
+	const int32 BPreparesWithTwoFields = BallB->PrepareEventCount;
+	B->SyncSubsystem->Tick(.01f);
+	TestEqual(TEXT("Two continuous fields on B's ball produce one preparation per tick"), BallB->PrepareEventCount, BPreparesWithTwoFields + 1);
+	TestTrue(TEXT("Both locally driven fields are listed together"), BallB->LastPrepareFields.Num() == 2 &&
+		BallB->LastPrepareFields.Contains(Motion) && BallB->LastPrepareFields.Contains(Color));
 	BallB->SetSyncFieldSourceInternal(Color, Fixed, Sample(900, 0));
 	if (!WaitFor(TEXT("An explicit zero is preserved"), [&] { return IsState(BallA, 34, 0); }) ||
 		!Calibrate(B) ||
@@ -305,6 +329,23 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 		FromDefaults->SetSyncFieldSourceInternal(Color, Follow, {}))) { return false; }
 	PC->Tick(.01f);
 	TestEqual(TEXT("Retaking the only pending field cancels the actor event"), FromDefaults->ReceiveEventCount, BeforeCancel);
+
+	// Another actor's prepare callback grants a previously fixed field while this tick is in progress.
+	Spawned->bReceiveDataFromPeer = true;
+	Spawned->PrepareOutgoingPayloadInternal(Sample(500, 0));
+	Spawned->PayloadAtPrepare = Sample(61, 0);
+	const int32 BeforeGrant = Spawned->PrepareEventCount;
+	FromDefaults->PrepareAction = [this, Spawned, Motion, Follow]
+	{
+		TestTrue(TEXT("A prepare callback can grant a field on another actor"), Spawned->SetSyncFieldSourceInternal(Motion, Follow, {}));
+	};
+	PC->Tick(.01f);
+	FromDefaults->PrepareAction = nullptr;
+	TestEqual(TEXT("An actor newly granted a field waits until its next sync tick to prepare"), Spawned->PrepareEventCount, BeforeGrant);
+	TestTrue(TEXT("The grant does not publish the actor's stale cached sample"), IsState(Spawned, 52, 4));
+	PC->Tick(.01f);
+	TestEqual(TEXT("The newly active actor prepares once on the next tick"), Spawned->PrepareEventCount, BeforeGrant + 1);
+	TestTrue(TEXT("Its first published sample comes from its own prepare callback"), IsState(Spawned, 61, 4));
 
 	if (!TestTrue(TEXT("Queue color before unregistering"), FromDefaults->SetSyncFieldSourceInternal(Color, Fixed, Sample(0, 6))))
 	{

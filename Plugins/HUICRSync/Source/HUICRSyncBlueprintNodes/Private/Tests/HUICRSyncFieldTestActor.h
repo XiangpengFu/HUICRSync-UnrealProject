@@ -26,6 +26,25 @@ public:
 	TArray<uint8> InitialBytesAtConstruction;
 	bool bSetConstructionDefault = false;
 
+	virtual void OnPrepareSyncFields_Implementation(const TArray<FName>& FieldsToPrepare) override
+	{
+		++PrepareEventCount;
+		LastPrepareFields = FieldsToPrepare;
+		if (PayloadAtPrepare.IsValid())
+		{
+			PrepareOutgoingPayloadInternal(PayloadAtPrepare);
+		}
+		if (PrepareAction)
+		{
+			PrepareAction();
+		}
+	}
+
+	int32 PrepareEventCount = 0;
+	TArray<FName> LastPrepareFields;
+	FInstancedStruct PayloadAtPrepare;
+	TFunction<void()> PrepareAction;
+
 	virtual void OnSyncFieldsReceived_Implementation() override
 	{
 		++ReceiveEventCount;

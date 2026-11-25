@@ -258,8 +258,14 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	int32 EventY = 0;
 	auto* FieldsReceived = FKismetEditorUtilities::AddDefaultEventNode(Blueprint, Graph,
 		GET_FUNCTION_NAME_CHECKED(AHUICRSyncActor, OnSyncFieldsReceived), AHUICRSyncActor::StaticClass(), EventY);
+	auto* PrepareFields = FKismetEditorUtilities::AddDefaultEventNode(Blueprint, Graph,
+		GET_FUNCTION_NAME_CHECKED(AHUICRSyncActor, OnPrepareSyncFields), AHUICRSyncActor::StaticClass(), EventY);
+	auto* PrepareMask = PrepareFields ? PrepareFields->FindPin(TEXT("FieldsToPrepare"), EGPD_Output) : nullptr;
 	if (!TestNotNull(TEXT("Actual Blueprint BeginPlay"), BeginPlay) ||
 		!TestNotNull(TEXT("Sync Actor exposes its own receive event to the graph"), FieldsReceived) ||
+		!TestTrue(TEXT("Sync Actor's prepare event exposes a field-name array to Blueprint"),
+			PrepareMask && PrepareMask->PinType.IsArray() && PrepareMask->PinType.PinCategory == UEdGraphSchema_K2::PC_Name) ||
+		!Wire(PrepareFields->FindPin(Then), WriteOngoing->FindPin(Exec)) ||
 		!Wire(FieldsReceived->FindPin(Then), ReadOngoing->FindPin(Exec)) ||
 		!Wire(BeginPlay->FindPin(Then), ReadBirth->FindPin(Exec)) ||
 		!Wire(ReadBirth->FindPin(TEXT("NoValidPayload")), EmptyColor->FindPin(Exec)) ||

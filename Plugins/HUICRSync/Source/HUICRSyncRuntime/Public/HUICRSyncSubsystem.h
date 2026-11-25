@@ -266,8 +266,8 @@ public:
 	FHUICRSyncSimpleEvent OnSyncSceneReady;
 
 	/**
-	 * Fires on this device before sending gameplay state on an active sync tick.
-	 * Use Write Sync Payload (Current Local Values) here to prepare this device's sample.
+	 * Device-wide notification before sending gameplay state on an active sync tick.
+	 * To prepare only one Sync Actor's locally controlled fields, use its On Prepare Sync Fields event.
 	 */
 	UPROPERTY(BlueprintAssignable, Category = "HUICR Sync|Events", meta = (DisplayName = "On Prepare Net Data to Send"))
 	FHUICRSyncSimpleEvent OnPrepareNetDataSend;
@@ -522,6 +522,7 @@ private:
 	void SeedInitialFields(AHUICRSyncActor& Actor);
 	void SetFieldWriter(AHUICRSyncActor& Actor, FName Field, FSharedField& State, int32 Writer, const TArray<uint8>* Value);
 	void RevokeParticipantFields(int32 ParticipantId);
+	void PrepareLocalActorFields(const FFieldActorState& State, int32 LocalWriter);
 	void TickSyncFields();
 	bool HandleFieldCommand(FHUICRSyncPeerRuntimeState& Peer, const FHUICRSyncCommandPayload& Command);
 	bool ReceiveFieldPacket(FHUICRSyncPeerRuntimeState& Peer, FArchive& Reader);
