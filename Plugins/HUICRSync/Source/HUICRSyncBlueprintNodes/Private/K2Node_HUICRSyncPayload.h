@@ -4,6 +4,20 @@
 #include "HUICRSyncFields.h"
 #include "K2Node_HUICRSyncPayload.generated.h"
 
+UENUM()
+enum class EHUICRSyncPayloadWriteMode : uint8
+{
+	Initial UMETA(ToolTip = "Set the starting values before the PC captures the actor for spawning."),
+	Outgoing UMETA(ToolTip = "Prepare this device's latest local values for fields it controls.")
+};
+
+UENUM()
+enum class EHUICRSyncPayloadReadMode : uint8
+{
+	Initial UMETA(ToolTip = "Read the starting values supplied when this actor was spawned."),
+	Received UMETA(ToolTip = "Read the current PC-confirmed values and the fields to apply.")
+};
+
 /** Payload nodes use the shared payload type configured on the owning Sync Actor Blueprint. */
 UCLASS(Abstract)
 class UK2Node_HUICRSyncPayload : public UK2Node
@@ -12,6 +26,7 @@ class UK2Node_HUICRSyncPayload : public UK2Node
 
 public:
 	virtual void AllocateDefaultPins() override;
+	virtual void ConvertDeprecatedNode(UEdGraph* Graph, bool bOnlySafeChanges) override;
 	virtual void ExpandNode(FKismetCompilerContext& Compiler, UEdGraph* SourceGraph) override;
 	virtual void PinDefaultValueChanged(UEdGraphPin* Pin) override;
 	virtual bool HasExternalDependencies(TArray<UStruct*>* OptionalOutput = nullptr) const override;
@@ -25,6 +40,13 @@ public:
 	static FName MemberPinName(FName PropertyName);
 
 protected:
+	bool IsReadNode() const;
+	bool UsesInitialPayload() const;
+	void AddModePin();
+
+	UPROPERTY()
+	bool bInitialMode = false;
+
 	// A Blueprint's new generated CDO is not populated yet when its graph is expanded.
 	UPROPERTY()
 	TObjectPtr<UScriptStruct> CachedPayloadStruct;
@@ -34,6 +56,18 @@ protected:
 
 	UPROPERTY()
 	EHUICRSyncFieldSource SelectedSource = EHUICRSyncFieldSource::FollowMyPayload;
+};
+
+UCLASS()
+class UK2Node_WriteSyncPayload : public UK2Node_HUICRSyncPayload
+{
+	GENERATED_BODY()
+};
+
+UCLASS()
+class UK2Node_ReadSyncPayload : public UK2Node_HUICRSyncPayload
+{
+	GENERATED_BODY()
 };
 
 UCLASS()

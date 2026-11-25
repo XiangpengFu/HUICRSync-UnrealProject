@@ -64,6 +64,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload", meta = (BlueprintInternalUseOnly = "true"))
 	bool SetInitialPayloadInternal(const FInstancedStruct& Payload);
 
+	UFUNCTION(BlueprintCallable, BlueprintPure = false, Category = "HUICR Sync|Payload", meta = (BlueprintInternalUseOnly = "true"))
+	bool ReadInitialPayloadInternal(FInstancedStruct& Payload) const;
+
 	void InitializeSpawnPayload(const TArray<uint8>& SpawnPayload);
 
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload", meta = (BlueprintInternalUseOnly = "true"))

@@ -129,6 +129,21 @@ bool AHUICRSyncActor::SetInitialPayloadInternal(const FInstancedStruct& Payload)
 	return true;
 }
 
+bool AHUICRSyncActor::ReadInitialPayloadInternal(FInstancedStruct& Payload) const
+{
+	// Spawn bytes have no schema tag. Accept only a complete round trip with this actor's shared struct.
+	TArray<uint8> RoundTrip;
+	if (!ActorInitPayloadData.IsEmpty() && HUICRSyncFields::CanUseLegacyBytes(SharedPayloadStruct) &&
+		UHUICRSyncPayloadLibrary::ReadInstancedStruct(ActorInitPayloadData, SharedPayloadStruct, Payload) &&
+		UHUICRSyncPayloadLibrary::WriteInstancedStruct(RoundTrip, SharedPayloadStruct, Payload) &&
+		RoundTrip == ActorInitPayloadData)
+	{
+		return true;
+	}
+	Payload.Reset();
+	return false;
+}
+
 bool AHUICRSyncActor::PrepareOutgoingPayloadInternal(const FInstancedStruct& Payload)
 {
 	if (!SharedPayloadStruct || !bSendDataToPeer || Payload.GetScriptStruct() != SharedPayloadStruct)
@@ -183,16 +198,8 @@ bool AHUICRSyncActor::GetInitialSyncField(FName Field, TArray<uint8>& OutBytes) 
 {
 	OutBytes.Reset();
 	const FProperty* Property = HUICRSyncActorFields::FindField(SharedPayloadStruct, Field);
-	if (!Property || ActorInitPayloadData.IsEmpty() || !HUICRSyncFields::CanUseLegacyBytes(SharedPayloadStruct))
-	{
-		return false;
-	}
 	FInstancedStruct Initial;
-	TArray<uint8> RoundTrip;
-	// Legacy init bytes carry no schema tag. Only seed from a complete round trip of this actor's schema.
-	return UHUICRSyncPayloadLibrary::ReadInstancedStruct(ActorInitPayloadData, SharedPayloadStruct, Initial) &&
-		UHUICRSyncPayloadLibrary::WriteInstancedStruct(RoundTrip, SharedPayloadStruct, Initial) &&
-		RoundTrip == ActorInitPayloadData && HUICRSyncFields::Encode(*Property, Initial, OutBytes);
+	return Property && ReadInitialPayloadInternal(Initial) && HUICRSyncFields::Encode(*Property, Initial, OutBytes);
 }
 
 bool AHUICRSyncActor::ValidateSyncField(FName Field, const TArray<uint8>* OptionalBytes) const

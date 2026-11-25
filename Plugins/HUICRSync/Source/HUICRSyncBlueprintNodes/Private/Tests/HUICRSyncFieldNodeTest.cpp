@@ -4,12 +4,15 @@
 #include "HUICRSyncActor.h"
 #include "HUICRSyncPayloadLibrary.h"
 #include "HUICRSyncSubsystem.h"
+#include "BlueprintActionDatabase.h"
+#include "BlueprintNodeSpawner.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "K2Node_CustomEvent.h"
+#include "K2Node_Event.h"
 #include "K2Node_VariableSet.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -23,6 +26,22 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHUICRSyncFieldNodeTest, "HUICRSync.Blueprint.S
 
 bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 {
+	auto HasPaletteEntry = [](UClass* NodeClass)
+	{
+		FBlueprintActionDatabase& Database = FBlueprintActionDatabase::Get();
+		Database.RefreshClassActions(NodeClass);
+		const auto* Actions = Database.GetAllActions().Find(NodeClass);
+		return Actions && Actions->ContainsByPredicate([NodeClass](const UBlueprintNodeSpawner* Action)
+			{ return Action && Action->NodeClass.Get() == NodeClass; });
+	};
+	for (UClass* Node : { UK2Node_SetInitialPayload::StaticClass(), UK2Node_PrepareOutgoingPayload::StaticClass(), UK2Node_ReadReceivedPayload::StaticClass() })
+	{
+		TestFalse(*FString::Printf(TEXT("Legacy %s is absent from the node menu"), *Node->GetName()), HasPaletteEntry(Node));
+	}
+	for (UClass* Node : { UK2Node_WriteSyncPayload::StaticClass(), UK2Node_ReadSyncPayload::StaticClass(), UK2Node_SetSyncFieldSource::StaticClass() })
+	{
+		TestTrue(*FString::Printf(TEXT("%s is available in the node menu"), *Node->GetName()), HasPaletteEntry(Node));
+	}
 	for (const FName Name : { GET_MEMBER_NAME_CHECKED(AHUICRSyncActor, ActorInitPayloadData),
 		GET_MEMBER_NAME_CHECKED(AHUICRSyncActor, ActorSendPayloadData), GET_MEMBER_NAME_CHECKED(AHUICRSyncActor, ActorReceivePayloadData) })
 	{
@@ -43,6 +62,15 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	const FName ObservedColor(TEXT("ObservedPayloadColor"));
+	const FName ObservedFields(TEXT("ObservedPayloadFields"));
+	FEdGraphPinType VectorPin, MaskPin;
+	VectorPin.PinCategory = UEdGraphSchema_K2::PC_Struct;
+	VectorPin.PinSubCategoryObject = TBaseStructure<FVector>::Get();
+	MaskPin.PinCategory = UEdGraphSchema_K2::PC_Name;
+	MaskPin.ContainerType = EPinContainerType::Array;
+	FBlueprintEditorUtils::AddMemberVariable(Blueprint, ObservedColor, VectorPin);
+	FBlueprintEditorUtils::AddMemberVariable(Blueprint, ObservedFields, MaskPin);
 	Blueprint->GeneratedClass->GetDefaultObject<AHUICRSyncActor>()->SharedPayloadStruct = PayloadType;
 	UEdGraph* Graph = Blueprint->UbergraphPages[0];
 	const auto* Schema = GetDefault<UEdGraphSchema_K2>();
@@ -127,15 +155,113 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+
+	// Build the two public nodes in both modes alongside the original, still loadable nodes.
+	auto NewEvent = [&](FName Name)
+	{
+		auto* Node = NewObject<UK2Node_CustomEvent>(Graph);
+		Node->CustomFunctionName = Name;
+		Add(Node);
+		return Node;
+	};
+	auto SetObserved = [&](FName Name)
+	{
+		auto* Node = NewObject<UK2Node_VariableSet>(Graph);
+		Node->VariableReference.SetSelfMember(Name);
+		Add(Node);
+		return Node;
+	};
+	const FName ColorPin = UK2Node_HUICRSyncPayload::MemberPinName(Color->GetFName());
+	auto* WriteBirth = NewObject<UK2Node_WriteSyncPayload>(Graph);
+	auto* WriteOngoing = NewObject<UK2Node_WriteSyncPayload>(Graph);
+	auto* ReadBirth = NewObject<UK2Node_ReadSyncPayload>(Graph);
+	auto* ReadOngoing = NewObject<UK2Node_ReadSyncPayload>(Graph);
+	Add(WriteBirth);
+	Add(WriteOngoing);
+	Add(ReadBirth);
+	Add(ReadOngoing);
+	TestEqual(TEXT("Write initially prepares outgoing data"), WriteBirth->FindPinChecked(TEXT("Mode"))->DefaultValue, FString(TEXT("Outgoing")));
+	TestEqual(TEXT("Read initially selects received state"), ReadBirth->FindPinChecked(TEXT("Mode"))->DefaultValue, FString(TEXT("Received")));
+	auto* ReadBirthEvent = NewEvent(TEXT("ReadBirth"));
+	auto* WriteBothEvent = NewEvent(TEXT("WriteBoth"));
+	auto* ReadOngoingEvent = NewEvent(TEXT("ReadOngoing"));
+	auto* BirthColor = SetObserved(ObservedColor);
+	auto* OngoingColor = SetObserved(ObservedColor);
+	auto* EmptyColor = SetObserved(ObservedColor);
+	auto* FieldsProbe = SetObserved(ObservedFields);
+	const FName Exec = UEdGraphSchema_K2::PN_Execute;
+	const FName Then = UEdGraphSchema_K2::PN_Then;
+	// Connect pins *before* mode switching, as a Blueprint developer can do.
+	if (!Wire(ReadBirthEvent->FindPin(Then), ReadBirth->FindPin(Exec)) ||
+		!Wire(ReadBirth->FindPin(TEXT("Valid")), BirthColor->FindPin(Exec)) ||
+		!Wire(ReadBirth->FindPin(ColorPin), BirthColor->FindPin(ObservedColor)) ||
+		!Wire(ReadBirth->FindPin(TEXT("FieldsToApply")), FieldsProbe->FindPin(ObservedFields)) ||
+		!Wire(WriteBothEvent->FindPin(Then), WriteBirth->FindPin(Exec)) ||
+		!Wire(WriteBirth->FindPin(Then), WriteOngoing->FindPin(Exec)))
+	{
+		return false;
+	}
+	Schema->TrySetDefaultValue(*WriteBirth->FindPinChecked(ColorPin), TEXT("1,0,0"));
+	Schema->TrySetDefaultValue(*WriteBirth->FindPinChecked(TEXT("Mode")), TEXT("Initial"));
+	Schema->TrySetDefaultValue(*WriteOngoing->FindPinChecked(ColorPin), TEXT("0,0,1"));
+	Schema->TrySetDefaultValue(*ReadBirth->FindPinChecked(TEXT("Mode")), TEXT("Initial"));
+	TestTrue(TEXT("Initial keeps its typed value and execution links"),
+		BirthColor->FindPinChecked(ObservedColor)->LinkedTo.Contains(ReadBirth->FindPinChecked(ColorPin)) &&
+		ReadBirth->FindPinChecked(Exec)->LinkedTo.Contains(ReadBirthEvent->FindPinChecked(Then)));
+	TestTrue(TEXT("Switching to Initial removes the received-only mask and its wire"),
+		!ReadBirth->FindPin(TEXT("FieldsToApply")) && FieldsProbe->FindPinChecked(ObservedFields)->LinkedTo.IsEmpty());
+	Schema->TrySetDefaultValue(*EmptyColor->FindPinChecked(ObservedColor), TEXT("-1,-1,-1"));
+	auto* BeginPlay = FBlueprintEditorUtils::FindOverrideForFunction(Blueprint, AActor::StaticClass(), TEXT("ReceiveBeginPlay"));
+	if (!BeginPlay)
+	{
+		int32 Y = 0;
+		BeginPlay = FKismetEditorUtilities::AddDefaultEventNode(Blueprint, Graph, TEXT("ReceiveBeginPlay"), AActor::StaticClass(), Y);
+	}
+	if (!TestNotNull(TEXT("Actual Blueprint BeginPlay"), BeginPlay) ||
+		!Wire(BeginPlay->FindPin(Then), ReadBirth->FindPin(Exec)) ||
+		!Wire(ReadBirth->FindPin(TEXT("NoValidPayload")), EmptyColor->FindPin(Exec)) ||
+		!Wire(ReadOngoingEvent->FindPin(Then), ReadOngoing->FindPin(Exec)) ||
+		!Wire(ReadOngoing->FindPin(TEXT("NoValidPayload")), EmptyColor->FindPin(Exec)) ||
+		!Wire(ReadOngoing->FindPin(TEXT("Valid")), OngoingColor->FindPin(Exec)) ||
+		!Wire(ReadOngoing->FindPin(ColorPin), OngoingColor->FindPin(ObservedColor)) ||
+		!Wire(OngoingColor->FindPin(Then), FieldsProbe->FindPin(Exec)) ||
+		!Wire(ReadOngoing->FindPin(TEXT("FieldsToApply")), FieldsProbe->FindPin(ObservedFields)))
+	{
+		return false;
+	}
+	// Exercise the same safe conversions used when a previously saved graph opens.
+	auto Upgrade = [&](UK2Node_HUICRSyncPayload* Legacy, UClass* ExpectedClass, const TCHAR* ExpectedMode)
+	{
+		const FGuid Guid = Legacy->NodeGuid;
+		Legacy->ConvertDeprecatedNode(Graph, true);
+		for (UEdGraphNode* Candidate : Graph->Nodes)
+		{
+			if (Candidate->NodeGuid == Guid)
+			{
+				const auto* Mode = Candidate->FindPin(TEXT("Mode"));
+				return TestTrue(*FString::Printf(TEXT("Retired node upgrades to %s / %s"), *ExpectedClass->GetName(), ExpectedMode),
+					Candidate->GetClass() == ExpectedClass && Mode && Mode->DefaultValue == ExpectedMode);
+			}
+		}
+		AddError(TEXT("The upgraded node lost its identity in the graph"));
+		return false;
+	};
+	if (!Upgrade(Initial, UK2Node_WriteSyncPayload::StaticClass(), TEXT("Initial")) ||
+		!Upgrade(Prepare, UK2Node_WriteSyncPayload::StaticClass(), TEXT("Outgoing")) ||
+		!Upgrade(Read, UK2Node_ReadSyncPayload::StaticClass(), TEXT("Received")))
+	{
+		return false;
+	}
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
 	FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection);
-	if (!TestTrue(TEXT("All four nodes compiled to runnable Blueprint bytecode"), Blueprint->Status != BS_Error))
+	if (!TestTrue(TEXT("Combined and legacy nodes compiled to runnable Blueprint bytecode"), Blueprint->Status != BS_Error))
 	{
 		return false;
 	}
 	auto* World = UWorld::CreateWorld(EWorldType::Game, false);
 	if (!TestNotNull(TEXT("Fixture world"), World)) { return false; }
-	ON_SCOPE_EXIT { World->DestroyWorld(false); };
+	bool bFinishNextFrame = false;
+	ON_SCOPE_EXIT { if (!bFinishNextFrame) { World->DestroyWorld(false); } };
 	auto* Actor = World->SpawnActor<AHUICRSyncActor>(Blueprint->GeneratedClass);
 	if (!TestNotNull(TEXT("Spawn compiled actor"), Actor)) { return false; }
 	auto* Probe = Actor->FindFunction(TEXT("ProbeSharedPayload"));
@@ -183,6 +309,48 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Specified color literal survived Blueprint compilation and field publication"),
 		Color->ContainerPtrToValuePtr<FVector>(Confirmed.GetMemory())->Equals(FVector(.25, .5, 1.0)));
 	TestTrue(TEXT("Ongoing updates leave the original spawn payload intact"), Actor->ActorInitPayloadData == BirthBytes);
+
+	auto* Mirror = World->SpawnActor<AHUICRSyncActor>(Blueprint->GeneratedClass);
+	if (!TestNotNull(TEXT("Temporary mirror"), Mirror)) { return false; }
+	const auto* ResultColor = FindFProperty<FStructProperty>(Blueprint->GeneratedClass, ObservedColor);
+	const auto* ResultFields = FindFProperty<FArrayProperty>(Blueprint->GeneratedClass, ObservedFields);
+	if (!TestNotNull(TEXT("Compiled color probe"), ResultColor) ||
+		!TestNotNull(TEXT("Compiled field mask probe"), ResultFields)) { return false; }
+	auto ReadColor = [Mirror, ResultColor]() { return *ResultColor->ContainerPtrToValuePtr<FVector>(Mirror); };
+	Mirror->ProcessEvent(Mirror->FindFunctionChecked(TEXT("ReadBirth")), nullptr);
+	TestTrue(TEXT("Missing birth data uses No Valid Payload"), ReadColor().Equals(FVector(-1)));
+	Actor->ProcessEvent(Actor->FindFunctionChecked(TEXT("WriteBoth")), nullptr);
+	TArray<uint8> LatestBytes;
+	if (!TestTrue(TEXT("Write Outgoing prepared a field"), Actor->GetPreparedSyncField(ColorName, LatestBytes)))
+	{
+		return false;
+	}
+	Mirror->InitializeSpawnPayload(Actor->ActorInitPayloadData);
+	Mirror->bReceiveDataFromPeer = false;
+	Mirror->DispatchBeginPlay();
+	TestTrue(TEXT("Blueprint BeginPlay reads the red birth value with live receive disabled"), ReadColor().Equals(FVector(1, 0, 0)));
+	Mirror->bReceiveDataFromPeer = true;
+	Mirror->ProcessEvent(Mirror->FindFunctionChecked(TEXT("ReadOngoing")), nullptr);
+	TestTrue(TEXT("Received has no value before confirmation"), ReadColor().Equals(FVector(-1)));
+	if (!TestTrue(TEXT("Deliver blue to the mirror"), Mirror->ApplyConfirmedSyncField(ColorName, LatestBytes, true))) { return false; }
+	Mirror->ProcessEvent(Mirror->FindFunctionChecked(TEXT("ReadBirth")), nullptr);
+	TestTrue(TEXT("Reading Initial again still returns red after live blue arrives"), ReadColor().Equals(FVector(1, 0, 0)));
+
+	// The received mask can be reread in the same frame. A later frame proves Initial never consumed it.
+	const uint64 ReadFrame = GFrameCounter;
+	const FName AuthoredColor(*Color->GetAuthoredName());
+	bFinishNextFrame = true;
+	ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([this, World, Mirror, ReadFrame, ReadColor, AuthoredColor, ResultFields]()
+	{
+		if (GFrameCounter == ReadFrame) { return false; }
+		FEditorScriptExecutionGuard Script;
+		Mirror->ProcessEvent(Mirror->FindFunctionChecked(TEXT("ReadOngoing")), nullptr);
+		TestTrue(TEXT("Read Received returns the newer blue"), ReadColor().Equals(FVector(0, 0, 1)));
+		TestTrue(TEXT("Read Initial did not consume the pending live color"),
+			ResultFields->ContainerPtrToValuePtr<TArray<FName>>(Mirror)->Contains(AuthoredColor));
+		World->DestroyWorld(false);
+		return true;
+	}));
 	return !HasAnyErrors();
 }
 #endif
