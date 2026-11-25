@@ -14,8 +14,8 @@ enum class EHUICRSyncPayloadWriteMode : uint8
 UENUM()
 enum class EHUICRSyncPayloadReadMode : uint8
 {
-	Initial UMETA(ToolTip = "Read the starting values supplied when this actor was spawned."),
-	Received UMETA(ToolTip = "Read the current PC-confirmed values and the fields to apply.")
+	Initial UMETA(DisplayName = "Initial Values", ToolTip = "Read the starting values supplied when this actor was spawned."),
+	Received UMETA(DisplayName = "Received Values", ToolTip = "Read the latest values confirmed by the PC and the fields to apply on this device.")
 };
 
 /** Payload nodes use the shared payload type configured on the owning Sync Actor Blueprint. */

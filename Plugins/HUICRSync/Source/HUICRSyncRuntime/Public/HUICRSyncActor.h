@@ -89,7 +89,7 @@ public:
 
 	/**
 	 * Fires once per receive batch when this Sync Actor has confirmed fields to apply on this device.
-	 * Use Read Sync Payload (Received) and check Fields To Apply.
+	 * Use Read Sync Payload (Received Values) and connect the Apply outputs for the fields you handle.
 	 */
 	UFUNCTION(BlueprintNativeEvent, Category = "HUICR Sync|Payload", meta = (DisplayName = "On Sync Fields Received"))
 	void OnSyncFieldsReceived();

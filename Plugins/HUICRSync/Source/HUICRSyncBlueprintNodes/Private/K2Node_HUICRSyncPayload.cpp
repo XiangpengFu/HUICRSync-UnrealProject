@@ -394,7 +394,7 @@ FText UK2Node_HUICRSyncPayload::GetTooltipText() const
 	}
 	if (IsA<UK2Node_ReadSyncPayload>())
 	{
-		return LOCTEXT("ReadSyncPayloadTip", "Initial reads the spawn values. Received reads the latest PC-confirmed values. After Valid, each connected Apply output runs if its field is listed in Fields To Apply.");
+		return LOCTEXT("ReadSyncPayloadTip", "Choose Initial Values to read this actor's spawn values. Choose Received Values to read the latest values confirmed by the PC. After Valid, each connected Apply output runs if its field is listed in Fields To Apply.");
 	}
 	if (IsA<UK2Node_SetInitialPayload>())
 	{
