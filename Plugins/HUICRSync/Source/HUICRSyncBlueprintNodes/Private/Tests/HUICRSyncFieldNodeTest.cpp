@@ -11,6 +11,7 @@
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "K2Node_AddDelegate.h"
 #include "K2Node_CustomEvent.h"
 #include "K2Node_Event.h"
 #include "K2Node_VariableSet.h"
@@ -18,8 +19,11 @@
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
+#include "NodeFactory.h"
+#include "SGraphNode.h"
 #include "UObject/Script.h"
 #include "UObject/UnrealType.h"
+#include "Widgets/SToolTip.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHUICRSyncFieldNodeTest, "HUICRSync.Blueprint.SharedPayloadNodes",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -84,6 +88,36 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 		Node->CreateNewGuid();
 		Node->AllocateDefaultPins();
 	};
+	// Names are intentionally literal: existing Blueprint bindings store these identifiers.
+	for (const FName SavedName : { FName(TEXT("OnPrepareNetDataSend")), FName(TEXT("OnNetDataReceived")) })
+	{
+		UClass* Owner = UHUICRSyncSubsystem::StaticClass();
+		const FProperty* Delegate = Owner->FindPropertyByName(SavedName);
+		if (!TestNotNull(*FString::Printf(TEXT("Saved binding %s resolves"), *SavedName.ToString()), Delegate))
+		{
+			return false;
+		}
+		if (SavedName == TEXT("OnPrepareNetDataSend"))
+		{
+			TestEqual(TEXT("Prepare event has a clear pre-send display name"),
+				Delegate->GetMetaData(TEXT("DisplayName")), FString(TEXT("On Prepare Net Data to Send")));
+		}
+		auto* Bind = NewObject<UK2Node_AddDelegate>(Graph);
+		Bind->SetFromProperty(Delegate, false, Owner);
+		Add(Bind);
+		TestEqual(TEXT("Bind node keeps its saved member name"), Bind->GetPropertyName(), SavedName);
+		TestTrue(TEXT("Bind title includes the delegate display name"),
+			Bind->GetNodeTitle(ENodeTitleType::FullTitle).ToString().Contains(Delegate->GetDisplayNameText().ToString()));
+		const TSharedPtr<SGraphNode> Widget = FNodeFactory::CreateNodeWidget(Bind);
+		const TSharedPtr<IToolTip> Hover = Widget ? Widget->GetToolTip() : nullptr;
+		if (TestTrue(TEXT("Placed bind node supplies a text tooltip"), Hover && Hover->AsWidget()->GetType() == TEXT("SToolTip")))
+		{
+			const FText& Displayed = StaticCastSharedRef<SToolTip>(Hover->AsWidget())->GetTextTooltip();
+			TestTrue(TEXT("Bind hover explains the selected delegate"),
+				!Displayed.IsEmpty() && Displayed.EqualTo(Delegate->GetToolTipText()));
+		}
+		Bind->DestroyNode();
+	}
 	auto Wire = [this, Schema](UEdGraphPin* From, UEdGraphPin* To)
 	{
 		return TestTrue(TEXT("Graph pins can be connected"), From && To && Schema->TryCreateConnection(From, To));

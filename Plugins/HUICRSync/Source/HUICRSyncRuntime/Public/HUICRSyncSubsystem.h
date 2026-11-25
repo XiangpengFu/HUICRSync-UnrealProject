@@ -265,9 +265,17 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "HUICR Sync|Events")
 	FHUICRSyncSimpleEvent OnSyncSceneReady;
 
-	UPROPERTY(BlueprintAssignable, Category = "HUICR Sync|Events")
+	/**
+	 * Fires on this device before sending gameplay state on an active sync tick.
+	 * Use Write Sync Payload (Current Local Values) here to prepare this device's sample.
+	 */
+	UPROPERTY(BlueprintAssignable, Category = "HUICR Sync|Events", meta = (DisplayName = "On Prepare Net Data to Send"))
 	FHUICRSyncSimpleEvent OnPrepareNetDataSend;
 
+	/**
+	 * Device-wide notification after the subsystem processes network data. Updates for any actor can trigger it.
+	 * For one Sync Actor's fields, use its On Sync Fields Received event.
+	 */
 	UPROPERTY(BlueprintAssignable, Category = "HUICR Sync|Events")
 	FHUICRSyncSimpleEvent OnNetDataReceived;
 

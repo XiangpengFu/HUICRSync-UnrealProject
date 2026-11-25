@@ -78,7 +78,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload", meta = (BlueprintInternalUseOnly = "true"))
 	bool ReadReceivedPayloadInternal(FInstancedStruct& Payload, TArray<FName>& FieldsToApply);
 
-	/** Read Sync Payload (Received) here to apply this actor's newly confirmed fields on this device. */
+	/**
+	 * Fires once per receive batch when this Sync Actor has confirmed fields to apply on this device.
+	 * Use Read Sync Payload (Received) and check Fields To Apply.
+	 */
 	UFUNCTION(BlueprintNativeEvent, Category = "HUICR Sync|Payload", meta = (DisplayName = "On Sync Fields Received"))
 	void OnSyncFieldsReceived();
 	virtual void OnSyncFieldsReceived_Implementation() {}
