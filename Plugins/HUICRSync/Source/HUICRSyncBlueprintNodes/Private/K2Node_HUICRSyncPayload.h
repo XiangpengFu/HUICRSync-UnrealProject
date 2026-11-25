@@ -34,6 +34,7 @@ public:
 	virtual bool IsCompatibleWithGraph(const UEdGraph* TargetGraph) const override;
 	virtual void GetMenuActions(FBlueprintActionDatabaseRegistrar& Registrar) const override;
 	virtual FText GetNodeTitle(ENodeTitleType::Type TitleType) const override;
+	virtual FText GetPinDisplayName(const UEdGraphPin* Pin) const override;
 	virtual FText GetTooltipText() const override;
 	virtual FText GetMenuCategory() const override;
 	UScriptStruct* ResolvePayloadStruct() const;

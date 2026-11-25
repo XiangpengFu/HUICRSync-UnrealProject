@@ -386,6 +386,15 @@ FText UK2Node_HUICRSyncPayload::GetNodeTitle(ENodeTitleType::Type TitleType) con
 	return IsA<UK2Node_ReadReceivedPayload>() ? LOCTEXT("Read", "Read Received Payload") : LOCTEXT("SetSource", "Set Sync Field Source");
 }
 
+FText UK2Node_HUICRSyncPayload::GetPinDisplayName(const UEdGraphPin* Pin) const
+{
+	if (Pin && Pin->PinName == HUICRSyncNode::Mode)
+	{
+		return IsReadNode() ? LOCTEXT("ReadFromPin", "Read From") : LOCTEXT("WriteToPin", "Write To");
+	}
+	return Super::GetPinDisplayName(Pin);
+}
+
 FText UK2Node_HUICRSyncPayload::GetTooltipText() const
 {
 	if (IsA<UK2Node_WriteSyncPayload>())

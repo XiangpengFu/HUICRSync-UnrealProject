@@ -247,6 +247,10 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("Write initially prepares outgoing data"), WriteBirth->FindPinChecked(TEXT("Mode"))->DefaultValue, FString(TEXT("Outgoing")));
 	TestEqual(TEXT("Read initially selects received state"), ReadBirth->FindPinChecked(TEXT("Mode"))->DefaultValue, FString(TEXT("Received")));
+	TestEqual(TEXT("The saved write selector displays Write To"),
+		WriteBirth->GetPinDisplayName(WriteBirth->FindPinChecked(TEXT("Mode"))).ToString(), FString(TEXT("Write To")));
+	TestEqual(TEXT("The saved read selector displays Read From"),
+		ReadBirth->GetPinDisplayName(ReadBirth->FindPinChecked(TEXT("Mode"))).ToString(), FString(TEXT("Read From")));
 	const UEnum* ReadModes = CastChecked<UEnum>(ReadBirth->FindPinChecked(TEXT("Mode"))->PinType.PinSubCategoryObject.Get());
 	TestEqual(TEXT("Saved Initial mode displays Initial Values"),
 		ReadModes->GetMetaData(TEXT("DisplayName"), ReadModes->GetIndexByNameString(TEXT("Initial"))), FString(TEXT("Initial Values")));
