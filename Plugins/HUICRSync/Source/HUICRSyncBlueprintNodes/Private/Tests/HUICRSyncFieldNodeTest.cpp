@@ -42,6 +42,10 @@ bool FHUICRSyncFieldNodeTest::RunTest(const FString& Parameters)
 	{
 		TestTrue(*FString::Printf(TEXT("%s is available in the node menu"), *Node->GetName()), HasPaletteEntry(Node));
 	}
+	const FProperty* SubsystemProperty = AHUICRSyncActor::StaticClass()->FindPropertyByName(GET_MEMBER_NAME_CHECKED(AHUICRSyncActor, SyncSubsystem));
+	TestTrue(TEXT("Sync Subsystem is readable in Blueprint graphs and hidden in Details"),
+		SubsystemProperty && SubsystemProperty->HasAllPropertyFlags(CPF_BlueprintVisible | CPF_BlueprintReadOnly) &&
+		!SubsystemProperty->HasAnyPropertyFlags(CPF_Edit));
 	for (const FName Name : { GET_MEMBER_NAME_CHECKED(AHUICRSyncActor, ActorInitPayloadData),
 		GET_MEMBER_NAME_CHECKED(AHUICRSyncActor, ActorSendPayloadData), GET_MEMBER_NAME_CHECKED(AHUICRSyncActor, ActorReceivePayloadData) })
 	{

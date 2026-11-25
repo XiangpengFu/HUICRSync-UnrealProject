@@ -18,7 +18,7 @@ class HUICRSYNCRUNTIME_API AHUICRSyncActor : public AActor
 public:
 	AHUICRSyncActor();
 
-	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, Category = "HUICR Sync")
+	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync")
 	UHUICRSyncSubsystem* SyncSubsystem = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync")
