@@ -1,9 +1,11 @@
 #include "HUICRSyncSubsystem.h"
 
 #include "Components/PrimitiveComponent.h"
+#include "Engine/GameInstance.h"
 #include "HUICRSyncActor.h"
 #include "HUICRSyncHMDManagerBase.h"
 #include "HUICRSyncPCManagerBase.h"
+#include "HUICRSyncSpaceSetupSubsystem.h"
 #include "Misc/Base64.h"
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
@@ -120,10 +122,20 @@ void UHUICRSyncSubsystem::RegisterCalibrationManager(AHUICRSyncHMDManagerBase* M
 	CalibrationHMD = Manager;
 }
 
+bool UHUICRSyncSubsystem::CanStartLocalCalibration() const
+{
+	if (Role == EHUICRSyncRole::PC || (UsesManagedCalibration() && !bCanStartCalibration))
+	{
+		return false;
+	}
+	const auto* SpaceSetup = UGameInstance::GetSubsystem<UHUICRSyncSpaceSetupSubsystem>(GetGameInstance());
+	return !SpaceSetup || SpaceSetup->IsCalibrationScreenReady();
+}
+
 bool UHUICRSyncSubsystem::RequestCalibrationTurn()
 {
 	using namespace HUICRSyncCalibrationProtocol;
-	return Role == EHUICRSyncRole::HMD && bCanStartCalibration &&
+	return Role == EHUICRSyncRole::HMD && bCanStartCalibration && CanStartLocalCalibration() &&
 		SendReliableCommand(Join, {Integer(++CalibrationRequestSequence)});
 }
 

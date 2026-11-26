@@ -27,6 +27,21 @@
 	],
 	"Plugins": [
 		{
+			"Name": "OculusXR",
+			"Enabled": true,
+			"PlatformAllowList": [ "Android" ]
+		},
+		{
+			"Name": "AndroidPermission",
+			"Enabled": true,
+			"PlatformAllowList": [ "Android" ]
+		},
+		{
+			"Name": "ProceduralMeshComponent",
+			"Enabled": true,
+			"PlatformAllowList": [ "Android" ]
+		},
+		{
 			"Name": "StructUtils",
 			"Enabled": true
 		},

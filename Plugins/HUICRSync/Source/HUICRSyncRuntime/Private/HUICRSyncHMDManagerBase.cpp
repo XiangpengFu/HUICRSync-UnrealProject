@@ -1,9 +1,11 @@
 #include "HUICRSyncHMDManagerBase.h"
 
+#include "Engine/GameInstance.h"
 #include "HUICRSyncCalibrationSaveGame.h"
 #include "HUICRSyncCalibrator_HMD.h"
 #include "HUICRSyncConnectionSaveGame.h"
 #include "HUICRSyncScreen.h"
+#include "HUICRSyncSpaceSetupSubsystem.h"
 #include "HUICRSyncSubsystem.h"
 #include "Kismet/GameplayStatics.h"
 
@@ -581,18 +583,68 @@ void AHUICRSyncHMDManagerBase::RegisterCalibrator(AHUICRSyncCalibrator_HMD* Cali
 
 void AHUICRSyncHMDManagerBase::RegisterCalibrationActorsInWorld()
 {
+	// Space Setup can replace the room's screens while this manager stays alive.
+	const auto* SpaceSetup = UGameInstance::GetSubsystem<UHUICRSyncSpaceSetupSubsystem>(GetGameInstance());
+	const auto IsOtherRoom = [SpaceSetup](const AHUICRSyncScreen* Screen)
+	{
+		return SpaceSetup && SpaceSetup->IsScreenFromOtherRoom(Screen);
+	};
+	RegisteredScreens.RemoveAll([&](AHUICRSyncScreen* Screen)
+	{
+		if (!IsValid(Screen))
+		{
+			return true;
+		}
+		if (IsOtherRoom(Screen))
+		{
+			Screen->SetActorHiddenInGame(true);
+			Screen->DestroyDissolveBoxActor();
+			return true;
+		}
+		return false;
+	});
+	RegisteredCalibrators.RemoveAll([&](AHUICRSyncCalibrator_HMD* Calibrator)
+	{
+		if (!IsValid(Calibrator))
+		{
+			return true;
+		}
+		if (Calibrator->GetOwner() == this && (!IsValid(Calibrator->BoundScreen) || IsOtherRoom(Calibrator->BoundScreen)))
+		{
+			Calibrator->Destroy();
+			return true;
+		}
+		return IsOtherRoom(Calibrator->BoundScreen);
+	});
+	if (!RegisteredScreens.Contains(ManipulatedTargetScreen))
+	{
+		ManipulatedTargetScreen = nullptr;
+	}
+	if (!RegisteredCalibrators.Contains(ManipulatedTargetCalibrator))
+	{
+		ManipulatedTargetCalibrator = nullptr;
+	}
+
 	TArray<AActor*> FoundScreens;
 	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AHUICRSyncScreen::StaticClass(), FoundScreens);
 	for (AActor* Actor : FoundScreens)
 	{
-		RegisterScreen(Cast<AHUICRSyncScreen>(Actor));
+		auto* Screen = CastChecked<AHUICRSyncScreen>(Actor);
+		if (!IsOtherRoom(Screen))
+		{
+			RegisterScreen(Screen);
+		}
 	}
 
 	TArray<AActor*> FoundCalibrators;
 	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AHUICRSyncCalibrator_HMD::StaticClass(), FoundCalibrators);
 	for (AActor* Actor : FoundCalibrators)
 	{
-		RegisterCalibrator(Cast<AHUICRSyncCalibrator_HMD>(Actor));
+		auto* Calibrator = CastChecked<AHUICRSyncCalibrator_HMD>(Actor);
+		if (!IsOtherRoom(Calibrator->BoundScreen))
+		{
+			RegisterCalibrator(Calibrator);
+		}
 	}
 
 	if (bAutoSpawnCalibratorsForRegisteredScreens)
@@ -1172,6 +1224,10 @@ void AHUICRSyncHMDManagerBase::ChangeCalibrationState()
 		return;
 	}
 
+	if (!SyncSubsystem->bCalibrationState && !SyncSubsystem->CanStartLocalCalibration())
+	{
+		return;
+	}
 	SyncSubsystem->bCalibrationState = !SyncSubsystem->bCalibrationState;
 
 	if (SyncSubsystem->bCalibrationState)

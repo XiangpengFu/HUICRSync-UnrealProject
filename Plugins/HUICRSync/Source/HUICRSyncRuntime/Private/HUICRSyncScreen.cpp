@@ -5,6 +5,7 @@
 #include "Engine/GameInstance.h"
 #include "HUICRSyncCalibrationSaveGame.h"
 #include "HUICRSyncSubsystem.h"
+#include "HUICRSyncSpaceSetupSubsystem.h"
 #include "UObject/UnrealType.h"
 
 AHUICRSyncScreen::AHUICRSyncScreen()
@@ -257,6 +258,10 @@ void AHUICRSyncScreen::BeginPlay()
 
 void AHUICRSyncScreen::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (EndPlayReason == EEndPlayReason::Destroyed)
+	{
+		DestroyDissolveBoxActor();
+	}
 	if (SyncSubsystem)
 	{
 		SyncSubsystem->OnCalibrationStateChanged.RemoveDynamic(this, &AHUICRSyncScreen::HandleCalibrationStateChanged);
@@ -267,7 +272,8 @@ void AHUICRSyncScreen::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void AHUICRSyncScreen::HandleCalibrationStateChanged(bool bNewCalibrationState)
 {
-	SetActorHiddenInGame(!bNewCalibrationState);
+	const auto* SpaceSetup = UGameInstance::GetSubsystem<UHUICRSyncSpaceSetupSubsystem>(GetGameInstance());
+	SetActorHiddenInGame(!bNewCalibrationState || (SpaceSetup && SpaceSetup->IsScreenFromOtherRoom(this)));
 
 	if (bNewCalibrationState)
 	{

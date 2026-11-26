@@ -28,6 +28,13 @@ public class HUICRSyncRuntime : ModuleRules
 			PublicDefinitions.Add("HUICR_WITH_NDISPLAY=0");
 		}
 
-		PrivateDependencyModuleNames.AddRange(new string[] {});
+		if (Target.Platform == UnrealTargetPlatform.Android)
+		{
+			// MRUK's public anchor and subsystem headers include types from these private SDK dependencies.
+			PrivateDependencyModuleNames.AddRange(new string[]
+			{
+				"MRUtilityKit", "OculusXRAnchors", "ProceduralMeshComponent", "HeadMountedDisplay", "Json", "AndroidPermission"
+			});
+		}
 	}
 }

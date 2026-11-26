@@ -166,6 +166,10 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync|Calibration")
 	FString CalibrationMessage;
 
+	/** Whether this headset can start calibration here, including its local room and the PC's permission. */
+	UFUNCTION(BlueprintPure, Category = "HUICR Sync|Calibration")
+	bool CanStartLocalCalibration() const;
+
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Calibration")
 	bool RequestCalibrationTurn();
 

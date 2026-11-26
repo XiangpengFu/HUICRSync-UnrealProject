@@ -6,6 +6,7 @@
 #include "Engine/GameInstance.h"
 #include "EngineUtils.h"
 #include "HUICRSyncHMDManagerBase.h"
+#include "HUICRSyncSpaceSetupSubsystem.h"
 #include "HUICRSyncSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "HUICRSyncCalibrationMenu"
@@ -24,6 +25,16 @@ void UHUICRSyncCalibrationMenu::NativeConstruct()
 	if (const UGameInstance* Game = GetGameInstance())
 	{
 		Session = Game->GetSubsystem<UHUICRSyncSubsystem>();
+		if (UButton* SetupButton = Cast<UButton>(GetWidgetFromName(TEXT("SetUpSpace"))))
+		{
+			SpaceSetup = Game->GetSubsystem<UHUICRSyncSpaceSetupSubsystem>();
+			SetupButton->OnClicked.AddUniqueDynamic(this, &ThisClass::OpenSpaceSetup);
+			if (SpaceSetup.IsValid())
+			{
+				SpaceSetup->OnSpaceSetupChanged.AddUObject(this, &ThisClass::RefreshCalibrationControls);
+				SpaceSetup->RefreshSpaceSetup();
+			}
+		}
 	}
 	if (Session.IsValid())
 	{
@@ -46,12 +57,27 @@ void UHUICRSyncCalibrationMenu::NativeDestruct()
 	{
 		Session->OnCalibrationUIStateChanged.RemoveDynamic(this, &ThisClass::RefreshCalibrationControls);
 	}
+	if (UButton* SetupButton = Cast<UButton>(GetWidgetFromName(TEXT("SetUpSpace"))))
+	{
+		SetupButton->OnClicked.RemoveDynamic(this, &ThisClass::OpenSpaceSetup);
+	}
+	if (SpaceSetup.IsValid())
+	{
+		SpaceSetup->OnSpaceSetupChanged.RemoveAll(this);
+	}
+	SpaceSetup.Reset();
 	Session.Reset();
 	Super::NativeDestruct();
 }
 
 void UHUICRSyncCalibrationMenu::RefreshCalibrationControls()
 {
+	const bool bUsesSpaceSetup = SpaceSetup.IsValid() && SpaceSetup->IsSpaceSetupRequired();
+	if (UButton* SetupButton = Cast<UButton>(GetWidgetFromName(TEXT("SetUpSpace"))))
+	{
+		SetupButton->SetVisibility(bUsesSpaceSetup ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		SetupButton->SetIsEnabled(bUsesSpaceSetup && SpaceSetup->CanLaunchSpaceSetup());
+	}
 	if (!Session.IsValid())
 	{
 		return;
@@ -94,7 +120,7 @@ void UHUICRSyncCalibrationMenu::RefreshCalibrationControls()
 	const bool bWaitingForHost = bManaged && !Session->bIsLocalHMDHost && Session->ScreenLayoutVersion == 0;
 	if (UButton* Start = Cast<UButton>(GetWidgetFromName(TEXT("StartCalibration"))))
 	{
-		Start->SetIsEnabled(!bManaged || Session->bCanStartCalibration);
+		Start->SetIsEnabled(Session->CanStartLocalCalibration());
 	}
 	if (UButton* Stop = Cast<UButton>(GetWidgetFromName(TEXT("StopCalibration"))))
 	{
@@ -139,7 +165,23 @@ void UHUICRSyncCalibrationMenu::RefreshCalibrationControls()
 		{
 			Message = LOCTEXT("LayoutChanged", "Screen layout updated. Calibrate again when ready.");
 		}
+		if (bUsesSpaceSetup)
+		{
+			const FText SetupHint = SpaceSetup->GetSpaceSetupHint();
+			if (!SetupHint.IsEmpty())
+			{
+				Message = SetupHint;
+			}
+		}
 		Hint->SetText(Message);
+	}
+}
+
+void UHUICRSyncCalibrationMenu::OpenSpaceSetup()
+{
+	if (SpaceSetup.IsValid() && SpaceSetup->CanLaunchSpaceSetup())
+	{
+		SpaceSetup->LaunchSpaceSetup();
 	}
 }
 

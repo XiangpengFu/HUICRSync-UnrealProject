@@ -4,6 +4,7 @@
 #include "Engine/GameInstance.h"
 #include "HUICRSyncCalibrationSaveGame.h"
 #include "HUICRSyncScreen.h"
+#include "HUICRSyncSpaceSetupSubsystem.h"
 #include "HUICRSyncSubsystem.h"
 
 AHUICRSyncCalibrator_HMD::AHUICRSyncCalibrator_HMD()
@@ -31,7 +32,7 @@ void AHUICRSyncCalibrator_HMD::InitCalibrator(UHUICRSyncCalibrationSaveGame* Sav
 
 void AHUICRSyncCalibrator_HMD::SetupTransformWithScreen()
 {
-	if (!BoundScreen)
+	if (!IsValid(BoundScreen))
 	{
 		return;
 	}
@@ -50,7 +51,7 @@ FHUICRSyncCalibratorPayload AHUICRSyncCalibrator_HMD::BuildCalibratorPayload() c
 
 int32 AHUICRSyncCalibrator_HMD::GetEffectiveCalibratorID() const
 {
-	return BoundScreen ? BoundScreen->ScreenID : CalibratorID;
+	return IsValid(BoundScreen) ? BoundScreen->ScreenID : CalibratorID;
 }
 
 void AHUICRSyncCalibrator_HMD::BeginPlay()
@@ -92,5 +93,6 @@ void AHUICRSyncCalibrator_HMD::Tick(float DeltaTime)
 
 void AHUICRSyncCalibrator_HMD::HandleCalibrationStateChanged(bool bNewCalibrationState)
 {
-	SetActorHiddenInGame(!bNewCalibrationState);
+	const auto* SpaceSetup = UGameInstance::GetSubsystem<UHUICRSyncSpaceSetupSubsystem>(GetGameInstance());
+	SetActorHiddenInGame(!bNewCalibrationState || (SpaceSetup && SpaceSetup->IsScreenFromOtherRoom(BoundScreen)));
 }

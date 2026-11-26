@@ -4,6 +4,7 @@
 #include "HUICRSyncCalibrationMenu.generated.h"
 
 class UHUICRSyncSubsystem;
+class UHUICRSyncSpaceSetupSubsystem;
 
 UCLASS()
 class HUICRSYNCRUNTIME_API UHUICRSyncCalibrationMenu : public UUserWidget
@@ -16,9 +17,13 @@ protected:
 
 private:
 	TWeakObjectPtr<UHUICRSyncSubsystem> Session;
+	TWeakObjectPtr<UHUICRSyncSpaceSetupSubsystem> SpaceSetup;
 
 	UFUNCTION()
 	void RefreshCalibrationControls();
+
+	UFUNCTION()
+	void OpenSpaceSetup();
 
 	UFUNCTION()
 	void CancelTurn();
