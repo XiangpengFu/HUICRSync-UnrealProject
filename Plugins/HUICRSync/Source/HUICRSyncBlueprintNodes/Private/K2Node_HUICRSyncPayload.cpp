@@ -487,7 +487,7 @@ void UK2Node_HUICRSyncPayload::ExpandNode(FKismetCompilerContext& Compiler, UEdG
 	{
 		FunctionName = UsesInitialPayload()
 			? GET_FUNCTION_NAME_CHECKED(AHUICRSyncActor, ReadInitialPayloadInternal)
-			: GET_FUNCTION_NAME_CHECKED(AHUICRSyncActor, ReadReceivedPayloadInternal);
+			: GET_FUNCTION_NAME_CHECKED(AHUICRSyncActor, ReadReceivedPayloadWithKeys);
 	}
 	else if (bSetSource)
 	{
@@ -552,8 +552,9 @@ void UK2Node_HUICRSyncPayload::ExpandNode(FKismetCompilerContext& Compiler, UEdG
 			Contains->SetFromFunction(UKismetArrayLibrary::StaticClass()->FindFunctionByName(
 				GET_FUNCTION_NAME_CHECKED(UKismetArrayLibrary, Array_Contains)));
 			Contains->AllocateDefaultPins();
-			Connect(ActorCall->FindPinChecked(HUICRSyncNode::FieldsToApply), Contains->GetTargetArrayPin());
-			Schema->TrySetDefaultValue(*Contains->FindPinChecked(TEXT("ItemToFind")), It->GetAuthoredName());
+			// A Blueprint field's authored label can lose spaces during cooking. Its reflected key survives.
+			Connect(ActorCall->FindPinChecked(TEXT("FieldKeys")), Contains->GetTargetArrayPin());
+			Schema->TrySetDefaultValue(*Contains->FindPinChecked(TEXT("ItemToFind")), It->GetName());
 
 			auto* Branch = Compiler.SpawnIntermediateNode<UK2Node_IfThenElse>(this, SourceGraph);
 			Branch->AllocateDefaultPins();

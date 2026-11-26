@@ -173,12 +173,19 @@ void AHUICRSyncHMDPawn::SubmitDeferredFieldSources()
 
 bool AHUICRSyncHMDPawn::ReadReceivedPayloadInternal(FInstancedStruct& Payload, TArray<FName>& FieldsToApply)
 {
+	TArray<FName> FieldKeys;
+	return ReadReceivedPayloadWithKeys(Payload, FieldsToApply, FieldKeys);
+}
+
+bool AHUICRSyncHMDPawn::ReadReceivedPayloadWithKeys(FInstancedStruct& Payload, TArray<FName>& FieldsToApply, TArray<FName>& FieldKeys)
+{
 	if (bReceiveDataFromPeer && PawnSyncEndpoint)
 	{
-		return PawnSyncEndpoint->ReadReceivedPayloadInternal(Payload, FieldsToApply);
+		return PawnSyncEndpoint->ReadReceivedPayloadWithKeys(Payload, FieldsToApply, FieldKeys);
 	}
 	Payload.Reset();
 	FieldsToApply.Reset();
+	FieldKeys.Reset();
 	return false;
 }
 

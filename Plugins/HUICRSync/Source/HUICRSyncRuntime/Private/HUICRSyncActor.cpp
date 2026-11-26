@@ -209,13 +209,13 @@ bool AHUICRSyncActor::ApplyConfirmedSyncField(FName Field, const TArray<uint8>& 
 		}
 		return false;
 	}
-	const FName AuthoredName(*Property->GetAuthoredName());
 	if (bApplyLocally && bReceiveDataFromPeer)
 	{
-		UnreadFields.AddUnique(AuthoredName);
+		const FName FieldKey = Property->GetFName();
+		UnreadFields.AddUnique(FieldKey);
 		if (SyncSubsystem)
 		{
-			SyncSubsystem->PendingActorFieldEvents.FindOrAdd(this).AddUnique(AuthoredName);
+			SyncSubsystem->PendingActorFieldEvents.FindOrAdd(this).AddUnique(FieldKey);
 		}
 	}
 	else
@@ -233,18 +233,18 @@ void AHUICRSyncActor::ClearSyncFieldToApply(FName Field)
 {
 	if (const FProperty* Property = HUICRSyncActorFields::FindField(SharedPayloadStruct, Field))
 	{
-		const FName AuthoredName(*Property->GetAuthoredName());
-		UnreadFields.Remove(AuthoredName);
-		LastReadFields.Remove(AuthoredName);
+		const FName FieldKey = Property->GetFName();
+		UnreadFields.Remove(FieldKey);
+		LastReadFields.Remove(FieldKey);
 		if (FieldsInReceiveEvent)
 		{
-			FieldsInReceiveEvent->Remove(AuthoredName);
+			FieldsInReceiveEvent->Remove(FieldKey);
 		}
 		if (SyncSubsystem)
 		{
 			if (TArray<FName>* Pending = SyncSubsystem->PendingActorFieldEvents.Find(this))
 			{
-				Pending->Remove(AuthoredName);
+				Pending->Remove(FieldKey);
 				if (Pending->IsEmpty())
 				{
 					SyncSubsystem->PendingActorFieldEvents.Remove(this);
@@ -276,7 +276,14 @@ void AHUICRSyncActor::ResetConfirmedSyncFields()
 
 bool AHUICRSyncActor::ReadReceivedPayloadInternal(FInstancedStruct& Payload, TArray<FName>& FieldsToApply)
 {
+	TArray<FName> FieldKeys;
+	return ReadReceivedPayloadWithKeys(Payload, FieldsToApply, FieldKeys);
+}
+
+bool AHUICRSyncActor::ReadReceivedPayloadWithKeys(FInstancedStruct& Payload, TArray<FName>& FieldsToApply, TArray<FName>& FieldKeys)
+{
 	FieldsToApply.Reset();
+	FieldKeys.Reset();
 	if (!bReceiveDataFromPeer || !SharedPayloadStruct || ConfirmedFields.GetScriptStruct() != SharedPayloadStruct)
 	{
 		Payload.Reset();
@@ -293,7 +300,14 @@ bool AHUICRSyncActor::ReadReceivedPayloadInternal(FInstancedStruct& Payload, TAr
 	}
 	UnreadFields.Reset();
 	// An event describes its own receive batch. Ordinary polling keeps its existing per-frame mask.
-	FieldsToApply = FieldsInReceiveEvent ? *FieldsInReceiveEvent : LastReadFields;
+	FieldKeys = FieldsInReceiveEvent ? *FieldsInReceiveEvent : LastReadFields;
+	for (FName Key : FieldKeys)
+	{
+		if (const FProperty* Property = SharedPayloadStruct->FindPropertyByName(Key))
+		{
+			FieldsToApply.Emplace(*Property->GetAuthoredName());
+		}
+	}
 	Payload = ConfirmedFields;
 	return true;
 }

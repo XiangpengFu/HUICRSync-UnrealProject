@@ -86,6 +86,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload", meta = (BlueprintInternalUseOnly = "true"))
 	bool ReadReceivedPayloadInternal(FInstancedStruct& Payload, TArray<FName>& FieldsToApply);
 
+	/** Field keys identify Apply pins in compiled graphs. FieldsToApply is the developer-facing list. */
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload", meta = (BlueprintInternalUseOnly = "true"))
+	bool ReadReceivedPayloadWithKeys(FInstancedStruct& Payload, TArray<FName>& FieldsToApply, TArray<FName>& FieldKeys);
+
 	/**
 	 * Fires once per active sync tick when this device supplies one or more of this actor's fields.
 	 * Fields To Prepare lists the fields confirmed by the PC to follow this device's payload.

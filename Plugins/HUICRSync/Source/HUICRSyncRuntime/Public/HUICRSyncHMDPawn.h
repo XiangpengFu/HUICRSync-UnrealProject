@@ -67,6 +67,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload", meta = (BlueprintInternalUseOnly = "true"))
 	bool ReadReceivedPayloadInternal(FInstancedStruct& Payload, TArray<FName>& FieldsToApply);
 
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload", meta = (BlueprintInternalUseOnly = "true"))
+	bool ReadReceivedPayloadWithKeys(FInstancedStruct& Payload, TArray<FName>& FieldsToApply, TArray<FName>& FieldKeys);
+
 	/** Prepare current local values for this pawn's listed fields before the plugin samples them. */
 	UFUNCTION(BlueprintNativeEvent, Category = "HUICR Sync|Payload", meta = (DisplayName = "On Prepare Sync Fields"))
 	void OnPrepareSyncFields(const TArray<FName>& FieldsToPrepare);
