@@ -27,6 +27,9 @@ Plugins/**/Binaries/
 Plugins/**/Intermediate/
 Plugins/**/Saved/
 
+# Local HUICRSync automation tests
+/Plugins/HUICRSync/Source/*/Private/Tests/
+
 # Local Codex / agent workspace metadata
 .agents/
 .codex/
