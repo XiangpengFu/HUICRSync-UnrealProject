@@ -13,6 +13,14 @@
 void UHUICRSyncCalibrationMenu::NativeConstruct()
 {
 	Super::NativeConstruct();
+	// The connection controls occupy the row below the title on this menu.
+	if (GetWidgetFromName(TEXT("ApplyPCIP")))
+	{
+		if (UWidget* Hint = GetWidgetFromName(TEXT("CalibrationHint")))
+		{
+			Hint->RemoveFromParent();
+		}
+	}
 	if (const UGameInstance* Game = GetGameInstance())
 	{
 		Session = Game->GetSubsystem<UHUICRSyncSubsystem>();
