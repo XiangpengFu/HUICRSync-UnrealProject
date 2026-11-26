@@ -39,7 +39,7 @@ struct FAddress
 	{
 		uint16 Length = 0;
 		Ar << ActorID << Instance << Length;
-		if (Ar.IsError() || ActorID < 0 || Instance == 0 || Length == 0 || Length > 4 * NAME_SIZE ||
+		if (Ar.IsError() || ActorID == MIN_int32 || Instance == 0 || Length == 0 || Length > 4 * NAME_SIZE ||
 			Length > Ar.TotalSize() - Ar.Tell())
 		{
 			return false;
@@ -98,18 +98,12 @@ TArray<uint8> BuildState(const FAddress& Address, uint64 Epoch, uint32 Sequence,
 	return Bytes;
 }
 
-// Keep room for session headers, the longest reflected field name and Base64 in a source command.
-bool FitsDatagram(FName Name, int32 NumBytes, int32 PacketLimit)
-{
-	const FString TextName = Name.ToString();
-	const int32 Length = StringCast<UTF8CHAR>(*TextName).Length();
-	return NumBytes >= 0 && (static_cast<int64>(NumBytes) + Length + 32) * 4 / 3 + 160 <= FMath::Min(PacketLimit, 65507);
-}
+using HUICRSyncFields::FitsDatagram;
 }
 
 UHUICRSyncSubsystem::FFieldActorState& UHUICRSyncSubsystem::EnsurePCFieldActor(AHUICRSyncActor& Actor)
 {
-	FFieldActorState& State = FieldActors.FindOrAdd(Actor.ActorID);
+	FFieldActorState& State = FieldActors.FindOrAdd(FieldActorKey(Actor));
 	if (State.Actor.Get() != &Actor)
 	{
 		State = FFieldActorState();
@@ -167,7 +161,8 @@ bool UHUICRSyncSubsystem::RequestSyncFieldSource(AHUICRSyncActor* Actor, FName F
 {
 	using namespace HUICRSharedFields;
 	const bool bFixed = Source == EHUICRSyncFieldSource::UseSpecifiedValue;
-	if (!IsValid(Actor) || Actor->TypeCode != EHUICRSyncActorType::HUIActor ||
+	if (!IsValid(Actor) || (Actor->TypeCode != EHUICRSyncActorType::HUIActor &&
+		(Actor->TypeCode != EHUICRSyncActorType::HMDPawn || Actor->ActorID <= 0)) ||
 		(!bFixed && Source != EHUICRSyncFieldSource::FollowMyPayload) ||
 		!FitsDatagram(Field, SpecifiedValue.Num(), MaxPacketBytes) || !Actor->ValidateSyncField(Field, bFixed ? &SpecifiedValue : nullptr))
 	{
@@ -200,14 +195,18 @@ bool UHUICRSyncSubsystem::RequestSyncFieldSource(AHUICRSyncActor* Actor, FName F
 		SetFieldWriter(*Actor, Field, FieldState, bFixed ? INDEX_NONE : 0, bFixed ? &SpecifiedValue : nullptr);
 		return true;
 	}
-	const FFieldActorState* ActorState = FieldActors.Find(Actor->ActorID);
-	if (!ActorState || ActorState->Actor.Get() != Actor || !bLocalSceneReady || bGameStopped || !bManagedCalibration)
+	const bool bPawn = Actor->TypeCode == EHUICRSyncActorType::HMDPawn;
+	const int32 Key = FieldActorKey(*Actor);
+	const FFieldActorState* ActorState = FieldActors.Find(Key);
+	if (!ActorState || ActorState->Actor.Get() != Actor || bGameStopped ||
+		(bPawn ? Actor->ActorID != LocalParticipantId || (bManagedCalibration && !bLocalSceneReady) :
+		 !bLocalSceneReady || !bManagedCalibration))
 	{
 		return false;
 	}
 	TArray<uint8> Bytes;
 	FMemoryWriter Writer(Bytes);
-	FAddress{ Actor->ActorID, ActorState->Instance, Field }.Write(Writer);
+	FAddress{ Key, ActorState->Instance, Field }.Write(Writer);
 	uint32 Request = ++NextFieldRequest;
 	uint8 Mode = static_cast<uint8>(Source);
 	Writer << LocalSceneGeneration << Request << Mode;
@@ -228,8 +227,8 @@ bool UHUICRSyncSubsystem::HandleFieldCommand(FHUICRSyncPeerRuntimeState& Peer, c
 	{
 		return false;
 	}
-	if (Role != EHUICRSyncRole::PC || !bManagedCalibration || bGameStopped || !Peer.Info.bConnected ||
-		!Peer.bHasCalibrated || Peer.ReadySceneGeneration <= 0 || Command.Args.Num() != 1 ||
+	if (Role != EHUICRSyncRole::PC || bGameStopped || !Peer.Info.bConnected ||
+		(bManagedCalibration && (!Peer.bHasCalibrated || Peer.ReadySceneGeneration <= 0)) || Command.Args.Num() != 1 ||
 		Command.Args[0].Type != EHUICRSyncCommandArgType::String || Command.Args[0].StringValue.Len() > MaxPacketBytes)
 	{
 		return true;
@@ -253,9 +252,11 @@ bool UHUICRSyncSubsystem::HandleFieldCommand(FHUICRSyncPeerRuntimeState& Peer, c
 	FFieldActorState* ActorState = FieldActors.Find(Address.ActorID);
 	const FManagedSceneActor* Record = ManagedSceneActors.Find(MakeActorKey(EHUICRSyncActorType::HUIActor, Address.ActorID));
 	const int32 Participant = Peer.Info.ParticipantId;
+	const bool bAllowed = Address.ActorID < 0 ? Address.ActorID == -Participant && Peer.PawnInstance == Address.Instance :
+		bManagedCalibration && Record && Record->ExcludedParticipantId != Participant;
 	TArray<uint8> Value;
 	if (!ActorState || ActorState->Instance != Address.Instance || !ActorState->Actor.IsValid() ||
-		!Record || Record->ExcludedParticipantId == Participant || Generation != Peer.ReadySceneGeneration ||
+		!bAllowed || Generation != Peer.ReadySceneGeneration ||
 		Generation != Peer.SceneGeneration || !Request || (!bFixed && Mode != static_cast<uint8>(EHUICRSyncFieldSource::FollowMyPayload)) ||
 		!ReadValue(Reader, Value, MaxPacketBytes) || !FitsDatagram(Address.Field, Value.Num(), MaxPacketBytes) ||
 		(!bFixed && !Value.IsEmpty()) || !ActorState->Actor->ValidateSyncField(Address.Field, bFixed ? &Value : nullptr))
@@ -282,7 +283,8 @@ void UHUICRSyncSubsystem::RevokeParticipantFields(int32 ParticipantId)
 			FSharedField& State = FieldPair.Value;
 			State.Deliveries.Remove(ParticipantId);
 			State.LastRequests.Remove(ParticipantId);
-			if (Actor && State.Writer == ParticipantId)
+			// A participant's own pawn persists across recalibration with its field choices intact.
+			if (Actor && Actor->TypeCode != EHUICRSyncActorType::HMDPawn && State.Writer == ParticipantId)
 			{
 				SetFieldWriter(*Actor, FieldPair.Key, State, INDEX_NONE, nullptr);
 			}
@@ -313,14 +315,21 @@ void UHUICRSyncSubsystem::SendFieldPacket(FHUICRSyncPeerRuntimeState& Peer, uint
 bool UHUICRSyncSubsystem::ReceiveFieldPacket(FHUICRSyncPeerRuntimeState& Peer, FArchive& Reader)
 {
 	using namespace HUICRSharedFields;
-	if (!bManagedCalibration || !Peer.Info.bConnected || Reader.TotalSize() > MaxPacketBytes)
+	if (!Peer.Info.bConnected || Reader.TotalSize() > MaxPacketBytes)
 	{
 		return false;
 	}
 	uint8 Kind = 0;
 	int32 Generation = 0;
 	Reader << Kind << Generation;
-	if (Reader.IsError() || Generation <= 0)
+	const int64 AddressOffset = Reader.Tell();
+	int32 ActorKey = 0;
+	Reader << ActorKey;
+	Reader.Seek(AddressOffset);
+	const bool bPawn = ActorKey < 0;
+	const int32 Owner = Role == EHUICRSyncRole::PC ? Peer.Info.ParticipantId : LocalParticipantId;
+	if (Reader.IsError() || (bPawn && (ActorKey != -Owner || bGameStopped)) ||
+		(bManagedCalibration ? Generation <= 0 : !bPawn || Generation != 0))
 	{
 		return false;
 	}
@@ -329,7 +338,7 @@ bool UHUICRSyncSubsystem::ReceiveFieldPacket(FHUICRSyncPeerRuntimeState& Peer, F
 		return Kind == State && !bIsLocalHMDCalibrating && Generation == LocalSceneGeneration &&
 			Generation >= ExpectedSceneGeneration && ReceiveFieldState(Reader, false, &Peer);
 	}
-	if (Role != EHUICRSyncRole::PC || (Kind != Ack && Kind != Upload) || !Peer.bHasCalibrated ||
+	if (Role != EHUICRSyncRole::PC || (Kind != Ack && Kind != Upload) || (bManagedCalibration && !Peer.bHasCalibrated) ||
 		Generation != Peer.ReadySceneGeneration || Generation != Peer.SceneGeneration)
 	{
 		return false;
@@ -517,9 +526,10 @@ void UHUICRSyncSubsystem::TickSyncFields()
 	const int32 LocalWriter = bPC ? 0 : LocalParticipantId;
 	const auto CanSync = [this, bPC, LocalWriter]()
 	{
-		return bManagedCalibration && bConnectionState && !bGameStopped &&
+		return bConnectionState && !bGameStopped &&
 			(bPC ? Role == EHUICRSyncRole::PC :
-				Role == EHUICRSyncRole::HMD && bLocalSceneReady && LocalWriter > 0 && LocalParticipantId == LocalWriter && FindDefaultPeer());
+				Role == EHUICRSyncRole::HMD && (!bManagedCalibration || bLocalSceneReady) &&
+				LocalWriter > 0 && LocalParticipantId == LocalWriter && FindDefaultPeer());
 	};
 	if (!CanSync())
 	{
@@ -530,6 +540,7 @@ void UHUICRSyncSubsystem::TickSyncFields()
 	TArray<TWeakObjectPtr<AHUICRSyncActor>, TInlineAllocator<16>> ActorsToPrepare;
 	for (const auto& Pair : FieldActors)
 	{
+		if (!bManagedCalibration && Pair.Key >= 0) { continue; }
 		for (const auto& Field : Pair.Value.Fields)
 		{
 			if (Field.Value.Writer == LocalWriter)
@@ -542,7 +553,7 @@ void UHUICRSyncSubsystem::TickSyncFields()
 	for (const TWeakObjectPtr<AHUICRSyncActor>& Key : ActorsToPrepare)
 	{
 		AHUICRSyncActor* Actor = Key.Get();
-		const FFieldActorState* ActorState = Actor ? FieldActors.Find(Actor->ActorID) : nullptr;
+		const FFieldActorState* ActorState = Actor ? FieldActors.Find(FieldActorKey(*Actor)) : nullptr;
 		if (ActorState && ActorState->Actor == Key)
 		{
 			PrepareLocalActorFields(*ActorState, LocalWriter);
@@ -558,6 +569,8 @@ void UHUICRSyncSubsystem::TickSyncFields()
 	for (auto It = FieldActors.CreateIterator(); It; ++It)
 	{
 		FFieldActorState& ActorState = It.Value();
+		const bool bPawn = It.Key() < 0;
+		if (!bManagedCalibration && !bPawn) { continue; }
 		AHUICRSyncActor* Actor = ActorState.Actor.Get();
 		if (!Actor)
 		{
@@ -568,7 +581,7 @@ void UHUICRSyncSubsystem::TickSyncFields()
 		{
 			FSharedField& Field = FieldPair.Value;
 			const FName FieldName = FieldPair.Key;
-			const FAddress Address { Actor->ActorID, ActorState.Instance, FieldName };
+			const FAddress Address { It.Key(), ActorState.Instance, FieldName };
 			// A PC Blueprint may have claimed a new field during preparation. Sample it on its first full tick.
 			if (Field.Writer == LocalWriter && (!bPC || Field.Epoch <= VersionBeforePrepare))
 			{
@@ -604,7 +617,7 @@ void UHUICRSyncSubsystem::TickSyncFields()
 				continue;
 			}
 			const FManagedSceneActor* SceneActor = ManagedSceneActors.Find(MakeActorKey(Actor->TypeCode, Actor->ActorID));
-			if (!SceneActor)
+			if (!bPawn && !SceneActor)
 			{
 				continue;
 			}
@@ -612,8 +625,9 @@ void UHUICRSyncSubsystem::TickSyncFields()
 			for (auto& PeerPair : Peers)
 			{
 				FHUICRSyncPeerRuntimeState& Peer = PeerPair.Value;
-				if (!Peer.Info.bConnected || !Peer.bHasCalibrated || Peer.ReadySceneGeneration <= 0 ||
-					Peer.ReadySceneGeneration != Peer.SceneGeneration || Peer.Info.ParticipantId == SceneActor->ExcludedParticipantId)
+				if (!Peer.Info.bConnected || (bManagedCalibration && (!Peer.bHasCalibrated || Peer.ReadySceneGeneration <= 0 ||
+					Peer.ReadySceneGeneration != Peer.SceneGeneration)) ||
+					(bPawn ? Peer.PawnCounterpart.Get() != Actor : Peer.Info.ParticipantId == SceneActor->ExcludedParticipantId))
 				{
 					continue;
 				}

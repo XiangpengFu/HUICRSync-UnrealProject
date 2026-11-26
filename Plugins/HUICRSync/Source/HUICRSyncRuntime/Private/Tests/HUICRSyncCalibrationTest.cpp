@@ -581,7 +581,15 @@ bool FHUICRSyncCalibrationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Guest did not create a new layout version"), PC->ScreenLayoutVersion, 1);
 
 	const FTransform GameView(FRotator(0, -17, 0), FVector(-400, 73, 145));
-	TestTrue(TEXT("Host followed during gameplay"), PCManager->ApplyHMDTransformToDefaultViewport(GameView));
+	auto* HostPoseSource = World->SpawnActor<AHUICRSyncActor>();
+	auto* GuestPoseSource = World->SpawnActor<AHUICRSyncActor>();
+	HostPoseSource->TypeCode = GuestPoseSource->TypeCode = EHUICRSyncActorType::HMDPawn;
+	HostPoseSource->ActorID = Host->LocalParticipantId;
+	GuestPoseSource->ActorID = Guest->LocalParticipantId;
+	TestTrue(TEXT("Host followed during gameplay"), PCManager->ApplyHMDTransformToDefaultViewport(GameView, HostPoseSource));
+	TestFalse(TEXT("The Guest's PC avatar cannot steer the shared viewpoint"),
+		PCManager->ApplyHMDTransformToDefaultViewport(FTransform::Identity, GuestPoseSource));
+	TestTrue(TEXT("Guest tracking preserves the last Host viewpoint"), Viewpoint->GetComponentTransform().Equals(GameView));
 	AHUICRSyncActor* HostMirrorBeforeCancel = Host->FindSyncActor(SharedActorType, 0);
 	AHUICRSyncActor* GuestMirrorBeforeCancel = Guest->FindSyncActor(SharedActorType, 0);
 	Host->RequestCalibrationTurn();

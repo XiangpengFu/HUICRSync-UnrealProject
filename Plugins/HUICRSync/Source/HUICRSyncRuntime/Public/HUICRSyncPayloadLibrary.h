@@ -17,6 +17,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload")
 	static bool ReadInstancedStruct(const TArray<uint8>& InBytes, UScriptStruct* StructType, FInstancedStruct& OutStruct);
 
+	static bool WriteInitialValues(TArray<uint8>& Bytes, UScriptStruct* Schema, const FInstancedStruct& Payload);
+	static bool ReadInitialValues(const TArray<uint8>& Bytes, UScriptStruct* Schema, FInstancedStruct& Payload);
+
 	static void WriteSpawnRequestPayload(TArray<uint8>& OutBytes, UClass* SpawnClass, const FTransform& SpawnTransform, bool bSpawnBackOnSender, const TArray<uint8>& InitPayloadBytes = TArray<uint8>());
 	static bool ReadSpawnRequestPayload(const TArray<uint8>& InBytes, FString& OutClassPath, FTransform& OutTransform, bool& bOutSpawnBackOnSender, TArray<uint8>& OutInitPayloadBytes);
 

@@ -1,6 +1,7 @@
 #include "K2Node_HUICRSyncPayload.h"
 
 #include "HUICRSyncActor.h"
+#include "HUICRSyncHMDPawn.h"
 #include "BlueprintActionDatabaseRegistrar.h"
 #include "BlueprintNodeSpawner.h"
 #include "EdGraphSchema_K2.h"
@@ -174,8 +175,13 @@ UScriptStruct* UK2Node_HUICRSyncPayload::ResolvePayloadStruct() const
 		return CachedPayloadStruct;
 	}
 	const UClass* Class = BP->GeneratedClass ? BP->GeneratedClass.Get() : BP->ParentClass.Get();
-	const AHUICRSyncActor* Defaults = Class ? Cast<AHUICRSyncActor>(Class->GetDefaultObject()) : nullptr;
-	return Defaults ? Defaults->SharedPayloadStruct.Get() : nullptr;
+	const UObject* Defaults = Class ? Class->GetDefaultObject() : nullptr;
+	if (const auto* Pawn = Cast<AHUICRSyncHMDPawn>(Defaults))
+	{
+		return Pawn->SharedPayloadStruct;
+	}
+	const auto* Actor = Cast<AHUICRSyncActor>(Defaults);
+	return Actor ? Actor->SharedPayloadStruct.Get() : nullptr;
 }
 
 void UK2Node_HUICRSyncPayload::GetFieldChoices(TArray<TSharedPtr<FName>>& Choices) const
@@ -337,7 +343,8 @@ void UK2Node_HUICRSyncPayload::PinDefaultValueChanged(UEdGraphPin* Pin)
 bool UK2Node_HUICRSyncPayload::IsCompatibleWithGraph(const UEdGraph* TargetGraph) const
 {
 	const UBlueprint* BP = TargetGraph ? FBlueprintEditorUtils::FindBlueprintForGraph(TargetGraph) : nullptr;
-	return BP && BP->ParentClass && BP->ParentClass->IsChildOf(AHUICRSyncActor::StaticClass())
+	return BP && BP->ParentClass && (BP->ParentClass->IsChildOf(AHUICRSyncActor::StaticClass()) ||
+		BP->ParentClass->IsChildOf(AHUICRSyncHMDPawn::StaticClass()))
 		&& Super::IsCompatibleWithGraph(TargetGraph);
 }
 
@@ -399,7 +406,7 @@ FText UK2Node_HUICRSyncPayload::GetTooltipText() const
 {
 	if (IsA<UK2Node_WriteSyncPayload>())
 	{
-		return LOCTEXT("WriteSyncPayloadTip", "Choose Initial Values for the values sent when the PC spawns this actor's mirrors. In On Prepare Sync Fields, choose Current Local Values to supply the fields listed for this device.");
+		return LOCTEXT("WriteSyncPayloadTip", "Choose Initial Values to set the starting values for the counterpart. In On Prepare Sync Fields, choose Current Local Values to supply the fields listed for this device.");
 	}
 	if (IsA<UK2Node_ReadSyncPayload>())
 	{
@@ -429,7 +436,7 @@ void UK2Node_HUICRSyncPayload::ExpandNode(FKismetCompilerContext& Compiler, UEdG
 	UScriptStruct* Struct = ResolvePayloadStruct();
 	if (!Struct)
 	{
-		Compiler.MessageLog.Error(TEXT("@@ requires a Shared Payload Struct in the Sync Actor's Class Defaults."), this);
+		Compiler.MessageLog.Error(TEXT("@@ requires a Shared Payload Struct in Class Defaults."), this);
 		BreakAllNodeLinks();
 		return;
 	}
@@ -490,7 +497,9 @@ void UK2Node_HUICRSyncPayload::ExpandNode(FKismetCompilerContext& Compiler, UEdG
 	{
 		FunctionName = GET_FUNCTION_NAME_CHECKED(AHUICRSyncActor, SetInitialPayloadInternal);
 	}
-	UK2Node_CallFunction* ActorCall = SpawnCall(AHUICRSyncActor::StaticClass(), FunctionName);
+	UClass* PayloadOwner = Compiler.Blueprint->ParentClass->IsChildOf(AHUICRSyncHMDPawn::StaticClass())
+		? AHUICRSyncHMDPawn::StaticClass() : AHUICRSyncActor::StaticClass();
+	UK2Node_CallFunction* ActorCall = SpawnCall(PayloadOwner, FunctionName);
 	auto* BoxCall = SpawnCall(UBlueprintInstancedStructLibrary::StaticClass(),
 		bRead ? GET_FUNCTION_NAME_CHECKED(UBlueprintInstancedStructLibrary, GetInstancedStructValue)
 		: GET_FUNCTION_NAME_CHECKED(UBlueprintInstancedStructLibrary, MakeInstancedStruct));

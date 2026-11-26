@@ -1,6 +1,7 @@
 #include "HUICRSyncActor.h"
 
 #include "Engine/GameInstance.h"
+#include "HUICRSyncHMDPawn.h"
 #include "HUICRSyncPayloadLibrary.h"
 #include "HUICRSyncSubsystem.h"
 #include "UObject/UnrealType.h"
@@ -115,33 +116,13 @@ void AHUICRSyncActor::InitializeSpawnPayload(const TArray<uint8>& SpawnPayload)
 bool AHUICRSyncActor::SetInitialPayloadInternal(const FInstancedStruct& Payload)
 {
 	// Construction Script and BeginPlay may provide defaults when the spawner supplied none.
-	if ((bHasExplicitSpawnPayload && !HasActorBegunPlay()) || !SharedPayloadStruct ||
-		Payload.GetScriptStruct() != SharedPayloadStruct || !HUICRSyncFields::CanUseLegacyBytes(SharedPayloadStruct))
-	{
-		return false;
-	}
-	TArray<uint8> InitialBytes;
-	if (!UHUICRSyncPayloadLibrary::WriteInstancedStruct(InitialBytes, SharedPayloadStruct, Payload))
-	{
-		return false;
-	}
-	ActorInitPayloadData = MoveTemp(InitialBytes);
-	return true;
+	return !(bHasExplicitSpawnPayload && !HasActorBegunPlay()) &&
+		UHUICRSyncPayloadLibrary::WriteInitialValues(ActorInitPayloadData, SharedPayloadStruct, Payload);
 }
 
 bool AHUICRSyncActor::ReadInitialPayloadInternal(FInstancedStruct& Payload) const
 {
-	// Spawn bytes have no schema tag. Accept only a complete round trip with this actor's shared struct.
-	TArray<uint8> RoundTrip;
-	if (!ActorInitPayloadData.IsEmpty() && HUICRSyncFields::CanUseLegacyBytes(SharedPayloadStruct) &&
-		UHUICRSyncPayloadLibrary::ReadInstancedStruct(ActorInitPayloadData, SharedPayloadStruct, Payload) &&
-		UHUICRSyncPayloadLibrary::WriteInstancedStruct(RoundTrip, SharedPayloadStruct, Payload) &&
-		RoundTrip == ActorInitPayloadData)
-	{
-		return true;
-	}
-	Payload.Reset();
-	return false;
+	return UHUICRSyncPayloadLibrary::ReadInitialValues(ActorInitPayloadData, SharedPayloadStruct, Payload);
 }
 
 bool AHUICRSyncActor::PrepareOutgoingPayloadInternal(const FInstancedStruct& Payload)
@@ -319,7 +300,7 @@ bool AHUICRSyncActor::ReadReceivedPayloadInternal(FInstancedStruct& Payload, TAr
 
 void AHUICRSyncActor::QueueSpawnMirror()
 {
-	if (!SyncSubsystem)
+	if (!SyncSubsystem || TypeCode == EHUICRSyncActorType::HMDPawn)
 	{
 		return;
 	}
@@ -349,6 +330,10 @@ void AHUICRSyncActor::DestroySyncActor()
 
 TSubclassOf<AHUICRSyncActor> AHUICRSyncActor::GetRemoteCounterpartClass() const
 {
+	if (TypeCode == EHUICRSyncActorType::HMDPawn)
+	{
+		return nullptr; // Participant pawns never spawn gameplay mirrors on other headsets.
+	}
 	if (UClass* ExplicitCounterpartClass = RemoteCounterpartClass.LoadSynchronous())
 	{
 		return ExplicitCounterpartClass;
@@ -357,6 +342,10 @@ TSubclassOf<AHUICRSyncActor> AHUICRSyncActor::GetRemoteCounterpartClass() const
 	return GetClass();
 }
 
+TSubclassOf<AHUICRSyncHMDPawn> AHUICRSyncActor::GetRemotePawnCounterpartClass() const
+{
+	return RemotePawnCounterpartClass.LoadSynchronous();
+}
 
 FTransform AHUICRSyncActor::ConvertHMDTransformToPC(const FTransform& InHMDTransform) const
 {

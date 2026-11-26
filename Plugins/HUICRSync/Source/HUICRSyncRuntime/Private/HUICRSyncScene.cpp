@@ -200,9 +200,10 @@ void UHUICRSyncSubsystem::QueueManagedSceneMirror(FHUICRSyncPeerRuntimeState& Pe
 
 void UHUICRSyncSubsystem::UnregisterManagedSceneMirror(AHUICRSyncActor& Actor)
 {
-	if (const FFieldActorState* State = FieldActors.Find(Actor.ActorID); State && State->Actor.Get() == &Actor)
+	const int32 FieldKey = FieldActorKey(Actor);
+	if (const FFieldActorState* State = FieldActors.Find(FieldKey); State && State->Actor.Get() == &Actor)
 	{
-		FieldActors.Remove(Actor.ActorID);
+		FieldActors.Remove(FieldKey);
 	}
 	const FString Key = MakeActorKey(Actor.TypeCode, Actor.ActorID);
 	LocalOnlySceneActors.Remove(Key);
@@ -673,7 +674,11 @@ void UHUICRSyncSubsystem::ClearLocalSceneMirrors()
 {
 	if (Role == EHUICRSyncRole::HMD)
 	{
-		FieldActors.Reset();
+		// Pawn pairing belongs to the connection, not to a particular calibration or scene snapshot.
+		for (auto It = FieldActors.CreateIterator(); It; ++It)
+		{
+			if (It.Key() >= 0) { It.RemoveCurrent(); }
+		}
 	}
 	auto Mirrors = MoveTemp(LocalSceneMirrors);
 	LocalSceneMirrors.Reset();

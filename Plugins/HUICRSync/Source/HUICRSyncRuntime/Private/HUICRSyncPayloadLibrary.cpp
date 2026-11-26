@@ -1,5 +1,6 @@
 #include "HUICRSyncPayloadLibrary.h"
 
+#include "HUICRSyncFields.h"
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 #include "Serialization/StructuredArchiveAdapters.h"
@@ -59,6 +60,30 @@ bool UHUICRSyncPayloadLibrary::ReadInstancedStruct(const TArray<uint8>& InBytes,
 	}
 
 	return true;
+}
+
+bool UHUICRSyncPayloadLibrary::WriteInitialValues(TArray<uint8>& Bytes, UScriptStruct* Schema, const FInstancedStruct& Payload)
+{
+	TArray<uint8> Encoded;
+	if (!HUICRSyncFields::CanUseLegacyBytes(Schema) || !WriteInstancedStruct(Encoded, Schema, Payload))
+	{
+		return false;
+	}
+	Bytes = MoveTemp(Encoded);
+	return true;
+}
+
+bool UHUICRSyncPayloadLibrary::ReadInitialValues(const TArray<uint8>& Bytes, UScriptStruct* Schema, FInstancedStruct& Payload)
+{
+	// Spawn bytes have no schema tag. Accept only a complete round trip with this endpoint's schema.
+	TArray<uint8> RoundTrip;
+	if (!Bytes.IsEmpty() && HUICRSyncFields::CanUseLegacyBytes(Schema) && ReadInstancedStruct(Bytes, Schema, Payload) &&
+		WriteInstancedStruct(RoundTrip, Schema, Payload) && RoundTrip == Bytes)
+	{
+		return true;
+	}
+	Payload.Reset();
+	return false;
 }
 
 void UHUICRSyncPayloadLibrary::WriteSpawnRequestPayload(TArray<uint8>& OutBytes, UClass* SpawnClass, const FTransform& SpawnTransform, bool bSpawnBackOnSender, const TArray<uint8>& InitPayloadBytes)

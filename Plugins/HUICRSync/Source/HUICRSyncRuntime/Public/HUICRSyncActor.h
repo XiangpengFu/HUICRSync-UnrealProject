@@ -7,6 +7,7 @@
 #include "StructUtils/InstancedStruct.h"
 #include "HUICRSyncActor.generated.h"
 
+class AHUICRSyncHMDPawn;
 class UHUICRSyncSubsystem;
 class UScriptStruct;
 
@@ -21,22 +22,29 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync")
 	UHUICRSyncSubsystem* SyncSubsystem = nullptr;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync")
+	/** A PC HUI Pawn receives its participant's ID when the pair is created. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync", meta = (EditCondition = "TypeCode != EHUICRSyncActorType::HMDPawn", EditConditionHides))
 	int32 ActorID = -1;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync")
 	EHUICRSyncActorType TypeCode = EHUICRSyncActorType::HUIActor;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Spawn")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Spawn", meta = (EditCondition = "TypeCode != EHUICRSyncActorType::HMDPawn", EditConditionHides))
 	EHUICRSyncActorClassRole SyncActorClassRole = EHUICRSyncActorClassRole::Shared;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Spawn")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Spawn", meta = (EditCondition = "TypeCode != EHUICRSyncActorType::HMDPawn", EditConditionHides))
 	TSoftClassPtr<AHUICRSyncActor> RemoteCounterpartClass;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync")
+	/** Local Quest pawn represented by this PC HUI Pawn. Set the matching PC class on the Quest pawn as well. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "HUICR Sync|Spawn", meta = (DisplayName = "Remote Counterpart Class", EditCondition = "TypeCode == EHUICRSyncActorType::HMDPawn", EditConditionHides))
+	TSoftClassPtr<AHUICRSyncHMDPawn> RemotePawnCounterpartClass;
+
+	TSubclassOf<AHUICRSyncHMDPawn> GetRemotePawnCounterpartClass() const;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync", meta = (EditCondition = "TypeCode != EHUICRSyncActorType::HMDPawn", EditConditionHides))
 	bool bAutoAssignActorID = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Spawn", meta = (DisplayName = "Participate in Sync at Start"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Spawn", meta = (DisplayName = "Participate in Sync at Start", EditCondition = "TypeCode != EHUICRSyncActorType::HMDPawn", EditConditionHides))
 	bool bParticipateInSyncAtStart = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUICR Sync|Payload")

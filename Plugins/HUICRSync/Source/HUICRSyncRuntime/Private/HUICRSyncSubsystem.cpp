@@ -19,7 +19,7 @@ namespace HUICRSyncProtocol
 	static constexpr uint32 PresenceMagic = 0x48555032;
 	static constexpr uint32 LeaveMagic = 0x48554C32;
 	static constexpr uint32 HeadPoseMagic = 0x48554832;
-	static constexpr int32 ProtocolVersion = 12;
+	static constexpr int32 ProtocolVersion = 13;
 
 	static FHUICRSyncCommandArg IntArg(int32 Value)
 	{
@@ -77,6 +77,7 @@ void UHUICRSyncSubsystem::Deinitialize()
 void UHUICRSyncSubsystem::Tick(float DeltaTime)
 {
 	ReceiveData();
+	TickPawnPairing();
 
 	if (!bGameStopped && bConnectionState &&
 		(Role == EHUICRSyncRole::PC || bIsLocalHMDHost || (bManagedCalibration && bLocalSceneReady)))
@@ -281,6 +282,11 @@ void UHUICRSyncSubsystem::ReceiveData()
 			bReceivedAnyData |= ReceiveFieldPacket(*Peer, Reader);
 			continue;
 		}
+		if (Magic == PawnPacketMagic && Peer)
+		{
+			bReceivedAnyData |= ReceivePawnPacket(*Peer, Reader);
+			continue;
+		}
 		if (Magic == HUICRSyncProtocol::PresenceMagic)
 		{
 			if (Role == EHUICRSyncRole::HMD)
@@ -463,6 +469,11 @@ void UHUICRSyncSubsystem::ReceiveData()
 			{
 				continue;
 			}
+			if (ReceivedEntry.TypeCode == EHUICRSyncActorType::HMDPawn)
+			{
+				// Pawn samples are accepted only through the session-bound pawn channel.
+				continue;
+			}
 			bReceivedAnyData = true;
 
 			if (ReceivedEntry.TypeCode == EHUICRSyncActorType::HUISpawnInGame)
@@ -514,6 +525,11 @@ void UHUICRSyncSubsystem::ReceiveData()
 
 void UHUICRSyncSubsystem::QueueNetEntry(const FHUICRSyncNetEntry& Entry)
 {
+	if (Entry.TypeCode == EHUICRSyncActorType::HMDPawn)
+	{
+		SendPawnSample(Entry);
+		return;
+	}
 	RegisteredStates.Add(Entry);
 }
 
@@ -720,7 +736,8 @@ bool UHUICRSyncSubsystem::QueueSpawnRequest(UClass* SpawnClass, const FTransform
 
 bool UHUICRSyncSubsystem::QueueSpawnMirror(UClass* SpawnClass, int32 ActorID, const FTransform& SpawnTransform, const TArray<uint8>& InitPayloadBytes)
 {
-	if (!SpawnClass || !SpawnClass->IsChildOf(AHUICRSyncActor::StaticClass()))
+	if (!SpawnClass || !SpawnClass->IsChildOf(AHUICRSyncActor::StaticClass()) ||
+		SpawnClass->GetDefaultObject<AHUICRSyncActor>()->TypeCode == EHUICRSyncActorType::HMDPawn)
 	{
 		return false;
 	}
@@ -897,7 +914,8 @@ int32 UHUICRSyncSubsystem::StartInitialSpawnSync()
 	for (const TPair<FString, TObjectPtr<AHUICRSyncActor>>& Pair : SpawnedSyncActors)
 	{
 		AHUICRSyncActor* SyncActor = Pair.Value.Get();
-		if (!IsValid(SyncActor) || !SyncActor->bParticipateInSyncAtStart || SyncActor->ActorID < 0)
+		if (!IsValid(SyncActor) || SyncActor->TypeCode == EHUICRSyncActorType::HMDPawn ||
+			!SyncActor->bParticipateInSyncAtStart || SyncActor->ActorID < 0)
 		{
 			continue;
 		}
@@ -970,7 +988,7 @@ AHUICRSyncActor* UHUICRSyncSubsystem::FindSyncActor(EHUICRSyncActorType TypeCode
 
 bool UHUICRSyncSubsystem::DestroySyncActor(EHUICRSyncActorType TypeCode, int32 ActorID)
 {
-	if (ActorID < 0)
+	if (ActorID < 0 || TypeCode == EHUICRSyncActorType::HMDPawn)
 	{
 		return false;
 	}
@@ -1015,7 +1033,7 @@ int32 UHUICRSyncSubsystem::ClearLocalSyncActors()
 	for (const TPair<FString, TObjectPtr<AHUICRSyncActor>>& Pair : SpawnedSyncActors)
 	{
 		AHUICRSyncActor* SyncActor = Pair.Value.Get();
-		if (IsValid(SyncActor))
+		if (IsValid(SyncActor) && SyncActor->TypeCode != EHUICRSyncActorType::HMDPawn)
 		{
 			ActorsToDestroy.Add(SyncActor);
 			ClearedTypes.Add(SyncActor->TypeCode);
@@ -1026,7 +1044,13 @@ int32 UHUICRSyncSubsystem::ClearLocalSyncActors()
 		}
 	}
 
-	SpawnedSyncActors.Reset();
+	for (auto It = SpawnedSyncActors.CreateIterator(); It; ++It)
+	{
+		if (!IsValid(It.Value()) || It.Value()->TypeCode != EHUICRSyncActorType::HMDPawn)
+		{
+			It.RemoveCurrent();
+		}
+	}
 	for (const EHUICRSyncActorType TypeCode : ClearedTypes)
 	{
 		ReceivedDataMap.Remove(TypeCode);
@@ -1226,6 +1250,19 @@ void UHUICRSyncSubsystem::ReserveActorID(EHUICRSyncActorType TypeCode, int32 Act
 
 void UHUICRSyncSubsystem::StopSync()
 {
+	ResetLocalPawnPairing();
+	if (Role == EHUICRSyncRole::PC)
+	{
+		TArray<FString> PeerIds;
+		Peers.GenerateKeyArray(PeerIds);
+		for (const FString& Id : PeerIds)
+		{
+			if (FHUICRSyncPeerRuntimeState* Peer = FindPeer(Id))
+			{
+				RemovePCPawn(*Peer);
+			}
+		}
+	}
 	for (const TPair<FString, FHUICRSyncPeerRuntimeState>& Pair : Peers)
 	{
 		if (Pair.Value.Info.bConnected)
@@ -1638,6 +1675,10 @@ bool UHUICRSyncSubsystem::HandleSpawnMirror(const FHUICRSyncNetEntry& Entry)
 
 	const AHUICRSyncActor* DefaultSyncActor = SpawnClass->GetDefaultObject<AHUICRSyncActor>();
 	const EHUICRSyncActorType ActorType = DefaultSyncActor ? DefaultSyncActor->TypeCode : EHUICRSyncActorType::HUIActor;
+	if (ActorType == EHUICRSyncActorType::HMDPawn)
+	{
+		return false;
+	}
 	if (FindSyncActor(ActorType, ActorID))
 	{
 		return true;
@@ -1692,7 +1733,7 @@ bool UHUICRSyncSubsystem::ResolveSpawnClasses(UClass* RequestedClass, UClass*& O
 	}
 
 	const AHUICRSyncActor* DefaultSyncActor = RequestedClass->GetDefaultObject<AHUICRSyncActor>();
-	if (!DefaultSyncActor)
+	if (!DefaultSyncActor || DefaultSyncActor->TypeCode == EHUICRSyncActorType::HMDPawn)
 	{
 		return false;
 	}
@@ -1938,7 +1979,8 @@ void UHUICRSyncSubsystem::HandleCommandPayload(FHUICRSyncPeerRuntimeState& Peer,
 	{
 		if (Role == EHUICRSyncRole::HMD && Args.Num() >= 2 &&
 			Args[0].Type == EHUICRSyncCommandArgType::Int32 &&
-			Args[1].Type == EHUICRSyncCommandArgType::Int32)
+			Args[1].Type == EHUICRSyncCommandArgType::Int32 &&
+			Args[0].IntValue != static_cast<int32>(EHUICRSyncActorType::HMDPawn))
 		{
 			DestroyLocalSyncActor(static_cast<EHUICRSyncActorType>(Args[0].IntValue), Args[1].IntValue);
 		}
@@ -2179,6 +2221,7 @@ void UHUICRSyncSubsystem::RemoveParticipant(const FString& PeerId)
 	if (Role == EHUICRSyncRole::PC)
 	{
 		RetiredSessions.Add(Removed.RemoteSession);
+		RemovePCPawn(Removed);
 		RevokeParticipantFields(Removed.Info.ParticipantId);
 		if (HostParticipantId == Removed.Info.ParticipantId)
 		{
@@ -2191,6 +2234,7 @@ void UHUICRSyncSubsystem::RemoveParticipant(const FString& PeerId)
 	}
 	else
 	{
+		ResetLocalPawnPairing();
 		ClearSessionTraffic();
 		ResetCalibrationSession();
 		DefaultPeerId.Reset();

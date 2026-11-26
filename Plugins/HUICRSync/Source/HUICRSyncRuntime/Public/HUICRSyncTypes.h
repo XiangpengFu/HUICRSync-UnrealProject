@@ -14,7 +14,7 @@ enum class EHUICRSyncRole : uint8
 UENUM(BlueprintType)
 enum class EHUICRSyncActorType : uint8
 {
-	HMDPawn UMETA(DisplayName = "HMD Pawn"),
+	HMDPawn UMETA(DisplayName = "HUI Pawn"),
 	HUICalibrator UMETA(DisplayName = "HUI Calibrator"),
 	HUIScreen UMETA(DisplayName = "HUI Screen"),
 	HUISpawnInGame UMETA(DisplayName = "HUI Spawn In Game"),

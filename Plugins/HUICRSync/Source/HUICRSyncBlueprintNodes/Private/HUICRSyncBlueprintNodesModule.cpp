@@ -1,5 +1,6 @@
 #include "K2Node_HUICRSyncPayload.h"
 #include "HUICRSyncActor.h"
+#include "HUICRSyncHMDPawn.h"
 #include "HUICRSyncSubsystem.h"
 
 #include "EdGraphUtilities.h"
@@ -82,7 +83,7 @@ public:
 private:
 	static void RefreshPayloadNodes(UObject* Object, FPropertyChangedEvent& Event)
 	{
-		if (!Object || !Object->HasAnyFlags(RF_ClassDefaultObject) || !Object->IsA<AHUICRSyncActor>()
+		if (!Object || !Object->HasAnyFlags(RF_ClassDefaultObject) || (!Object->IsA<AHUICRSyncActor>() && !Object->IsA<AHUICRSyncHMDPawn>())
 			|| Event.GetPropertyName() != GET_MEMBER_NAME_CHECKED(AHUICRSyncActor, SharedPayloadStruct))
 		{
 			return;

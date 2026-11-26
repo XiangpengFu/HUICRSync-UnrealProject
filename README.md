@@ -44,6 +44,14 @@ TVCG Paper DOI: `10.1109/TVCG.2026.3747530`
 5. Configure PC IP and sync port from the HMD widget or manager.
 6. Run connection, calibration, initial sync spawn, and game start in that order.
 
+### One PC avatar per headset
+
+The sample pairs `BP_HUICRPawn_HMD` with `BP_HUICRPawnSyncActor_PC`. When a headset connects with its player pawn, the PC spawns its avatar and assigns both the same participant ID. Disconnecting removes that avatar. A Guest promoted to Host keeps its existing avatar and ID.
+
+To make your own pair, derive the headset Blueprint from `HUICRSyncHMDPawn` and set it as the local player's pawn. Derive the PC Blueprint from `HUICRSyncActor` and select **HUI Pawn** under **Type Code**. In Class Defaults on each Blueprint, set **Remote Counterpart Class** to the other class and choose the same **Shared Payload Struct**. Include the PC avatar class in your PC build. The sample already cooks the folder containing both classes.
+
+Tracking fields follow their owning headset by default during gameplay. On the HMD, connect **On Prepare Sync Fields** to **Write Sync Payload** with **Current Local Values**. Convert tracked world transforms with **Convert HMD Transform to PC**. On the PC avatar, connect **On Sync Fields Received** to **Read Sync Payload** with **Received Values**, then use each field's **Apply** pin to update its component. A field set on the PC avatar with **Set Sync Field Source** goes to that avatar's paired headset. The sample's existing byte-based graphs also work with this pairing.
+
 ## PC and HMD Targets
 
 The project can use separate build targets for PC and HMD packaging:

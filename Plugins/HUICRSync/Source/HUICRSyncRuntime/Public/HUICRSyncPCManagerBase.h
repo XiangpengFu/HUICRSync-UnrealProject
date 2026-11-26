@@ -187,8 +187,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|nDisplay")
 	bool RestoreDefaultViewport();
 
-	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Motion Parallax")
-	bool ApplyHMDTransformToDefaultViewport(const FTransform& HMDTransform);
+	/** When called by a PC HUI Pawn, only the current Host's pawn drives the shared viewpoint. */
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Motion Parallax", meta = (DefaultToSelf = "PoseSource", AdvancedDisplay = "PoseSource"))
+	bool ApplyHMDTransformToDefaultViewport(const FTransform& HMDTransform, const UObject* PoseSource = nullptr);
 
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload")
 	bool SendLocalScreenPayload(int32 ScreenID, const FTransform& ScreenTransform, bool bRemoteControlsLocalScreen);

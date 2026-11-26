@@ -2,6 +2,7 @@
 
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "HUICRSyncActor.h"
 #include "HUICRSyncCalibrationSaveGame.h"
 #include "HUICRSyncCalibrator_PC.h"
 #include "HUICRSyncPCScreenVisual.h"
@@ -556,8 +557,14 @@ bool AHUICRSyncPCManagerBase::RestoreDefaultViewport()
 	return bRestored;
 }
 
-bool AHUICRSyncPCManagerBase::ApplyHMDTransformToDefaultViewport(const FTransform& HMDTransform)
+bool AHUICRSyncPCManagerBase::ApplyHMDTransformToDefaultViewport(const FTransform& HMDTransform, const UObject* PoseSource)
 {
+	const AHUICRSyncActor* Pawn = Cast<AHUICRSyncActor>(PoseSource);
+	if (Pawn && Pawn->TypeCode == EHUICRSyncActorType::HMDPawn &&
+		(!SyncSubsystem || SyncSubsystem->HostParticipantId <= 0 || Pawn->ActorID != SyncSubsystem->HostParticipantId))
+	{
+		return false;
+	}
 	LastHMDTransform = HMDTransform;
 
 	if (!SyncSubsystem || !DefaultViewportComponent || !SyncSubsystem->bMotionParallaxState || SyncSubsystem->bGameStopped)

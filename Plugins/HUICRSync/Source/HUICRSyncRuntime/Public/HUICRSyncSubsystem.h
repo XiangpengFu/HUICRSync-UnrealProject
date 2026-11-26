@@ -9,6 +9,7 @@
 class FInternetAddr;
 class FSocket;
 class AHUICRSyncActor;
+class AHUICRSyncHMDPawn;
 class AHUICRSyncPCManagerBase;
 class AHUICRSyncHMDManagerBase;
 class UPrimitiveComponent;
@@ -51,6 +52,10 @@ struct FHUICRSyncPeerRuntimeState
 	bool bNeedsSceneSnapshot = false;
 	double NextSceneSendTime = 0;
 	TArray<FHUICRSyncSceneOperation> SceneOperations;
+	int32 PawnRevision = 0;
+	uint64 PawnInstance = 0;
+	uint32 LastPawnSample = 0;
+	TWeakObjectPtr<AHUICRSyncActor> PawnCounterpart;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHUICRSyncConnectionStateChanged, bool, bConnected);
@@ -183,6 +188,8 @@ public:
 	float PeerTimeoutSeconds = 6.0f;
 
 	void SendLocalHeadPose(const FTransform& HeadPoseInPCSpace);
+	void RegisterLocalHMDPawn(AHUICRSyncHMDPawn* Pawn);
+	void UnregisterLocalHMDPawn(AHUICRSyncHMDPawn* Pawn);
 
 	UPROPERTY(BlueprintReadOnly, Category = "HUICR Sync")
 	bool bCalibrationState = false;
@@ -511,6 +518,21 @@ private:
 	};
 	TArray<FEarlyFieldRequest> EarlyFieldRequests;
 	TMap<int32, FFieldActorState> FieldActors;
+	// Ordinary actors retain their existing wire IDs. Negative field keys address participant-owned pawns.
+	static int32 FieldActorKey(const AHUICRSyncActor& Actor);
+	TWeakObjectPtr<AHUICRSyncHMDPawn> LocalHMDPawn;
+	TSoftClassPtr<AHUICRSyncActor> LegacyPawnClass;
+	int32 LocalPawnRevision = 0;
+	int32 ConfirmedPawnRevision = 0;
+	uint32 NextPawnSample = 0;
+	double NextPawnDescriptionTime = 0;
+	static constexpr uint32 PawnPacketMagic = 0x48555057; // HUPW
+	void TickPawnPairing();
+	bool ReceivePawnPacket(FHUICRSyncPeerRuntimeState& Peer, FArchive& Reader);
+	void SendPawnPacket(FHUICRSyncPeerRuntimeState& Peer, uint8 Kind, int32 Revision, const TArray<uint8>& Bytes);
+	void SendPawnSample(const FHUICRSyncNetEntry& Entry);
+	void ResetLocalPawnPairing();
+	void RemovePCPawn(FHUICRSyncPeerRuntimeState& Peer);
 	bool bFieldReceivePending = false;
 	TMap<TWeakObjectPtr<AHUICRSyncActor>, TArray<FName>> PendingActorFieldEvents;
 	bool bDispatchingActorFieldEvents = false;

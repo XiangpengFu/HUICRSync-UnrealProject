@@ -97,6 +97,14 @@ bool CanUseLegacyBytes(const UScriptStruct* StructType)
 	return true;
 }
 
+bool FitsDatagram(FName Name, int32 NumBytes, int32 PacketLimit)
+{
+	// Make room for the session header, reflected property name and Base64 source command.
+	const FString TextName = Name.ToString();
+	const int32 Length = StringCast<UTF8CHAR>(*TextName).Length();
+	return NumBytes >= 0 && (static_cast<int64>(NumBytes) + Length + 32) * 4 / 3 + 160 <= FMath::Min(PacketLimit, 65507);
+}
+
 bool Encode(const FProperty& Property, const FInstancedStruct& Payload, TArray<uint8>& OutBytes)
 {
 	OutBytes.Reset();
