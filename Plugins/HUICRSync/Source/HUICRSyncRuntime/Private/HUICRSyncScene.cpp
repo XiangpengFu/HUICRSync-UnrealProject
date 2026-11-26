@@ -148,30 +148,18 @@ bool UHUICRSyncSubsystem::RegisterManagedSceneMirror(AHUICRSyncActor* Actor, UCl
 	return true;
 }
 
-void UHUICRSyncSubsystem::QueueManagedSceneMirror(FHUICRSyncPeerRuntimeState& Peer, AHUICRSyncActor& Actor,
-	const FManagedSceneActor& Record)
+bool UHUICRSyncSubsystem::WriteManagedSpawnOperation(TArray<uint8>& Bytes, UClass* RemoteClass, int32 ActorId,
+	const FTransform& Transform, const TArray<uint8>& InitialPayload, const FManagedActorState* LatestState,
+	uint64 FieldInstance, const UScriptStruct* Schema)
 {
-	if (Record.ExcludedParticipantId == Peer.Info.ParticipantId)
+	if (InitialPayload.Num() > HUICRSyncScene::MaxOperationBytes)
 	{
-		return;
+		return false;
 	}
-
-	UClass* RemoteClass = Record.RemoteClass.LoadSynchronous();
-	if (!RemoteClass)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("HUICRSync missing scene counterpart for %s"), *Actor.GetPathName());
-		return;
-	}
-
 	TArray<uint8> MirrorBytes;
-	UHUICRSyncPayloadLibrary::WriteSpawnMirrorPayload(MirrorBytes, RemoteClass, Actor.ActorID,
-		Actor.GetActorTransform(), Record.InitialPayload);
-	FHUICRSyncSceneOperation Operation;
-	Operation.Kind = EHUICRSyncSceneOp::Spawn;
-	FMemoryWriter Writer(Operation.Bytes);
+	UHUICRSyncPayloadLibrary::WriteSpawnMirrorPayload(MirrorBytes, RemoteClass, ActorId, Transform, InitialPayload);
+	FMemoryWriter Writer(Bytes);
 	Writer << MirrorBytes;
-	const FString Key = MakeActorKey(Actor.TypeCode, Actor.ActorID);
-	const FManagedActorState* LatestState = LatestManagedActorStates.Find(Key);
 	bool bHasState = LatestState != nullptr;
 	Writer << bHasState;
 	if (LatestState)
@@ -179,12 +167,31 @@ void UHUICRSyncSubsystem::QueueManagedSceneMirror(FHUICRSyncPeerRuntimeState& Pe
 		FManagedActorState State = *LatestState;
 		Writer << State.Sequence << State.Entry;
 	}
+	FString SchemaPath = Schema ? Schema->GetPathName() : FString();
+	Writer << FieldInstance << SchemaPath;
+	return Bytes.Num() <= HUICRSyncScene::MaxOperationBytes;
+}
+
+void UHUICRSyncSubsystem::QueueManagedSceneMirror(FHUICRSyncPeerRuntimeState& Peer, AHUICRSyncActor& Actor,
+	const FManagedSceneActor& Record)
+{
+	if (Record.ExcludedParticipantId == Peer.Info.ParticipantId)
+	{
+		return;
+	}
+	UClass* RemoteClass = Record.RemoteClass.LoadSynchronous();
+	if (!RemoteClass)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("HUICRSync missing scene counterpart for %s"), *Actor.GetPathName());
+		return;
+	}
 	SeedInitialFields(Actor);
 	const FFieldActorState* FieldState = FieldActors.Find(Actor.ActorID);
-	uint64 FieldInstance = FieldState ? FieldState->Instance : 0;
-	FString SchemaPath = FieldState ? GetPathNameSafe(Actor.SharedPayloadStruct) : FString();
-	Writer << FieldInstance << SchemaPath;
-	if (Operation.Bytes.Num() <= HUICRSyncScene::MaxOperationBytes)
+	const FManagedActorState* LatestState = LatestManagedActorStates.Find(MakeActorKey(Actor.TypeCode, Actor.ActorID));
+	FHUICRSyncSceneOperation Operation;
+	Operation.Kind = EHUICRSyncSceneOp::Spawn;
+	if (WriteManagedSpawnOperation(Operation.Bytes, RemoteClass, Actor.ActorID, Actor.GetActorTransform(), Record.InitialPayload,
+		LatestState, FieldState ? FieldState->Instance : 0, FieldState ? Actor.SharedPayloadStruct.Get() : nullptr))
 	{
 		Peer.SceneOperations.Add(MoveTemp(Operation));
 		if (FieldState)

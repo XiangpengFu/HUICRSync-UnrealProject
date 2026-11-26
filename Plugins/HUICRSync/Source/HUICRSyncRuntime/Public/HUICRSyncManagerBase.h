@@ -51,10 +51,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Payload")
 	bool QueueScreenPayload(const FHUICRSyncScreenPayload& Payload);
 
-	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Spawn", meta = (AutoCreateRefTerm = "InitPayloadBytes"))
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Spawn", meta = (AutoCreateRefTerm = "InitPayloadBytes", BlueprintInternalUseOnly = "true"))
 	bool SpawnSyncActor(UClass* SpawnClass, const FTransform& SpawnTransform, const TArray<uint8>& InitPayloadBytes);
 
-	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Spawn", meta = (DisplayName = "Spawn Sync Actor"))
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Spawn", meta = (DisplayName = "Spawn Sync Actor", BlueprintInternalUseOnly = "true"))
 	bool SpawnSyncActorSimple(UClass* SpawnClass, const FTransform& SpawnTransform);
 
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Actor")

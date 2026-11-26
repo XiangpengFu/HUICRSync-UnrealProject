@@ -14,6 +14,7 @@ class AHUICRSyncPCManagerBase;
 class AHUICRSyncHMDManagerBase;
 class UPrimitiveComponent;
 struct FIPv4Endpoint;
+struct FInstancedStruct;
 enum class EHUICRSyncFieldSource : uint8;
 
 enum class EHUICRSyncSceneOp : uint8
@@ -334,14 +335,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Spawn", meta = (AutoCreateRefTerm = "InitPayloadBytes"))
 	AHUICRSyncActor* SpawnSyncActorAsAuthority(UClass* SpawnClass, const FTransform& SpawnTransform, const TArray<uint8>& InitPayloadBytes, bool bSpawnOnPeer = true);
 
-	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Spawn", meta = (AutoCreateRefTerm = "InitPayloadBytes"))
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Spawn", meta = (AutoCreateRefTerm = "InitPayloadBytes", BlueprintInternalUseOnly = "true"))
 	bool SpawnSyncActor(UClass* SpawnClass, const FTransform& SpawnTransform, const TArray<uint8>& InitPayloadBytes);
+
+	bool SpawnSyncActorWithInitialValues(UClass* SpawnClass, const FTransform& SpawnTransform, bool bUseLocalSpace, const FInstancedStruct& InitialValues);
 
 	/** Supply a transform in the calling device's local world. The original Spawn Sync Actor accepts PC-space transforms. */
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Spawn", meta = (AutoCreateRefTerm = "InitPayloadBytes"))
 	bool SpawnSyncActorFromLocalSpace(UClass* SpawnClass, const FTransform& SpawnTransform, const TArray<uint8>& InitPayloadBytes);
 
-	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Spawn", meta = (DisplayName = "Spawn Sync Actor"))
+	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Spawn", meta = (DisplayName = "Spawn Sync Actor", BlueprintInternalUseOnly = "true"))
 	bool SpawnSyncActorSimple(UClass* SpawnClass, const FTransform& SpawnTransform);
 
 	UFUNCTION(BlueprintCallable, Category = "HUICR Sync|Spawn")
@@ -580,6 +583,8 @@ private:
 	void ClearLocalSceneMirrors();
 	void ResetManagedSceneConnection();
 	bool RegisterManagedSceneMirror(AHUICRSyncActor* Actor, UClass* RemoteClass, const TArray<uint8>& InitialPayload, int32 ExcludedParticipantId = 0);
+	static bool WriteManagedSpawnOperation(TArray<uint8>& Bytes, UClass* RemoteClass, int32 ActorId, const FTransform& Transform,
+		const TArray<uint8>& InitialPayload, const FManagedActorState* LatestState, uint64 FieldInstance, const UScriptStruct* Schema);
 	void QueueManagedSceneMirror(FHUICRSyncPeerRuntimeState& Peer, AHUICRSyncActor& Actor, const FManagedSceneActor& Record);
 	void UnregisterManagedSceneMirror(AHUICRSyncActor& Actor);
 	bool SendManagedSpawnRequest(const TArray<uint8>& Payload);

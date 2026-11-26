@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "HUICRSyncFieldTestActor.h"
+#include "HUICRSyncSpawnNodeTest.h"
 #include "HUICRSyncFields.h"
 #include "HUICRSyncHMDManagerBase.h"
 #include "HUICRSyncPayloadLibrary.h"
@@ -214,6 +215,10 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("A second independent actor exists on B"), OtherB) ||
 		!WaitFor(TEXT("Both late-join mirrors can read their snapshot inside their own events"), [&]
 		{ return BallB->EventReadState(22, 1) && OtherB->EventReadState(41, 9); }))
+	{
+		return false;
+	}
+	if (!HUICRSyncSpawnNodeTest::Verify(*this, *World, *PC, *A->SyncSubsystem, *B->SyncSubsystem, WaitFor))
 	{
 		return false;
 	}

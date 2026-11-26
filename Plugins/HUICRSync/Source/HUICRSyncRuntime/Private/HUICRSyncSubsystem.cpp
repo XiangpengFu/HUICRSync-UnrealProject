@@ -813,6 +813,17 @@ AHUICRSyncActor* UHUICRSyncSubsystem::SpawnSyncActorForPeers(UClass* SpawnClass,
 	{
 		return nullptr;
 	}
+	if (bManagedCalibration && bSpawnOnPeer && !InitPayloadBytes.IsEmpty())
+	{
+		// Test the actual wire envelope before BeginPlay or ID allocation, including when no headset is connected yet.
+		TArray<uint8> Preview;
+		if (!WriteManagedSpawnOperation(Preview, RemoteSpawnClass, 0, SpawnTransform, InitPayloadBytes,
+			nullptr, 0, DefaultSyncActor->SharedPayloadStruct))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("HUICRSync cannot spawn %s: initial payload exceeds the managed scene operation limit."), *GetNameSafe(SpawnClass));
+			return nullptr;
+		}
+	}
 	const int32 NewActorID = AllocateActorID(ActorType);
 	TGuardValue<bool> SpawningActor(bSpawningManagedActor, bManagedCalibration);
 	AHUICRSyncActor* NewActor = SpawnSyncActorInternal(LocalSpawnClass, NewActorID, SpawnTransform, InitPayloadBytes);
@@ -873,6 +884,29 @@ bool UHUICRSyncSubsystem::SpawnSyncActor(UClass* SpawnClass, const FTransform& S
 bool UHUICRSyncSubsystem::SpawnSyncActorSimple(UClass* SpawnClass, const FTransform& SpawnTransform)
 {
 	return SpawnSyncActor(SpawnClass, SpawnTransform, {});
+}
+
+bool UHUICRSyncSubsystem::SpawnSyncActorWithInitialValues(UClass* SpawnClass, const FTransform& SpawnTransform,
+	bool bUseLocalSpace, const FInstancedStruct& InitialValues)
+{
+	TArray<uint8> Bytes;
+	if (InitialValues.IsValid())
+	{
+		UClass* LocalClass = nullptr;
+		UClass* RemoteClass = nullptr;
+		if (!ResolveSpawnClasses(SpawnClass, LocalClass, RemoteClass))
+		{
+			return false;
+		}
+		UScriptStruct* Schema = LocalClass->GetDefaultObject<AHUICRSyncActor>()->SharedPayloadStruct;
+		if (!Schema || RemoteClass->GetDefaultObject<AHUICRSyncActor>()->SharedPayloadStruct != Schema ||
+			!UHUICRSyncPayloadLibrary::WriteInitialValues(Bytes, Schema, InitialValues))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("HUICRSync cannot spawn %s with the supplied Initial Values. Select the same value-only Shared Payload Struct on both classes."), *GetNameSafe(SpawnClass));
+			return false;
+		}
+	}
+	return bUseLocalSpace ? SpawnSyncActorFromLocalSpace(SpawnClass, SpawnTransform, Bytes) : SpawnSyncActor(SpawnClass, SpawnTransform, Bytes);
 }
 
 bool UHUICRSyncSubsystem::SpawnSyncActorFromLocalSpace(UClass* SpawnClass, const FTransform& SpawnTransform,

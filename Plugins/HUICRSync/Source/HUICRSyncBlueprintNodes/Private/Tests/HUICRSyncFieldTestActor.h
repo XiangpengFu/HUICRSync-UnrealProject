@@ -15,6 +15,7 @@ public:
 	virtual void OnConstruction(const FTransform& Transform) override
 	{
 		Super::OnConstruction(Transform);
+		SpawnTransformAtConstruction = Transform;
 		InitialBytesAtConstruction = ActorInitPayloadData;
 		FInstancedStruct Initial = FInstancedStruct::Make<FHUICRSyncScreenPayload>();
 		auto& Value = Initial.GetMutable<FHUICRSyncScreenPayload>();
@@ -24,6 +25,7 @@ public:
 	}
 
 	TArray<uint8> InitialBytesAtConstruction;
+	FTransform SpawnTransformAtConstruction;
 	bool bSetConstructionDefault = false;
 
 	virtual void OnPrepareSyncFields_Implementation(const TArray<FName>& FieldsToPrepare) override

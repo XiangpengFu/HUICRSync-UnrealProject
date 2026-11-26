@@ -1,9 +1,37 @@
 #include "HUICRSyncPayloadLibrary.h"
 
+#include "Engine/GameInstance.h"
+#include "HUICRSyncActor.h"
 #include "HUICRSyncFields.h"
+#include "HUICRSyncManagerBase.h"
+#include "HUICRSyncSubsystem.h"
+#include "Kismet/GameplayStatics.h"
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 #include "Serialization/StructuredArchiveAdapters.h"
+
+bool UHUICRSyncPayloadLibrary::SpawnSyncActorWithInitialValues(const UObject* WorldContextObject, UObject* Target,
+	TSubclassOf<AHUICRSyncActor> SpawnClass, const FTransform& SpawnTransform, bool bUseLocalSpace, const FInstancedStruct& InitialValues)
+{
+	const UObject* Context = Target ? Target : WorldContextObject;
+	if (!IsValid(Context))
+	{
+		return false;
+	}
+	auto* Session = Cast<UHUICRSyncSubsystem>(const_cast<UObject*>(Context));
+	if (const auto* Manager = Cast<AHUICRSyncManagerBase>(Context))
+	{
+		Session = Manager->SyncSubsystem;
+	}
+	if (!Session)
+	{
+		if (UGameInstance* GameInstance = UGameplayStatics::GetGameInstance(Context))
+		{
+			Session = GameInstance->GetSubsystem<UHUICRSyncSubsystem>();
+		}
+	}
+	return IsValid(Session) && Session->SpawnSyncActorWithInitialValues(SpawnClass, SpawnTransform, bUseLocalSpace, InitialValues);
+}
 
 bool UHUICRSyncPayloadLibrary::WriteInstancedStruct(TArray<uint8>& OutBytes, UScriptStruct* StructType, const FInstancedStruct& InStruct)
 {

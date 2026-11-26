@@ -1,4 +1,5 @@
 #include "K2Node_HUICRSyncPayload.h"
+#include "K2Node_SpawnSyncActor.h"
 #include "HUICRSyncActor.h"
 #include "HUICRSyncHMDPawn.h"
 #include "HUICRSyncSubsystem.h"
@@ -101,6 +102,19 @@ private:
 		{
 			Node->ReconstructNode();
 			Node->GetGraph()->NotifyGraphChanged();
+		}
+		if (Object->IsA<AHUICRSyncActor>())
+		{
+			for (TObjectIterator<UK2Node_SpawnSyncActor> It; It; ++It)
+			{
+				const UBlueprint* BP = FBlueprintEditorUtils::FindBlueprintForNode(*It);
+				const UClass* Class = It->GetSpawnClass();
+				if (BP && !BP->bBeingCompiled && Class && Class->IsChildOf(Object->GetClass()))
+				{
+					It->ReconstructNode();
+					It->GetGraph()->NotifyGraphChanged();
+				}
+			}
 		}
 	}
 

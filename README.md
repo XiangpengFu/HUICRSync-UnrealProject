@@ -52,6 +52,12 @@ To make your own pair, derive the headset Blueprint from `HUICRSyncHMDPawn` and 
 
 Tracking fields follow their owning headset by default during gameplay. On the HMD, connect **On Prepare Sync Fields** to **Write Sync Payload** with **Current Local Values**. Convert tracked world transforms with **Convert HMD Transform to PC**. On the PC avatar, connect **On Sync Fields Received** to **Read Sync Payload** with **Received Values**, then use each field's **Apply** pin to update its component. A field set on the PC avatar with **Set Sync Field Source** goes to that avatar's paired headset. The sample's existing byte-based graphs also work with this pairing.
 
+### Spawn a Sync Actor with initial values
+
+Add **Spawn Sync Actor** and choose the actor Blueprint in **Spawn Class**. The node shows the fields from that class's **Shared Payload Struct**. Its PC and HMD counterparts should use the same struct. Set or connect a field, such as **Color**, and the spawned actors can read the values during **BeginPlay** with **Read Sync Payload → Initial Values**.
+
+Leaving every field untouched lets the actor provide its own initial values. Setting any field sends the whole struct, with its declared defaults for the other fields. Enable **Send Struct Defaults** to explicitly send the defaults, including zero or black. **Spawn Transform** uses PC coordinates by default. On a headset, enable **Use Local Space** to pass a transform in that headset's world.
+
 ## PC and HMD Targets
 
 The project can use separate build targets for PC and HMD packaging:
