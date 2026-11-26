@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Blueprint/UserWidget.h"
-#include "Types/SlateEnums.h"
 #include "HUICRSyncCalibrationMenu.generated.h"
 
 class UHUICRSyncSubsystem;
@@ -26,7 +25,4 @@ private:
 
 	UFUNCTION()
 	void SetGameParallax(bool bEnabled);
-
-	UFUNCTION()
-	void SelectPreviewScreen(FString Screen, ESelectInfo::Type SelectionType);
 };

@@ -2,7 +2,6 @@
 
 #include "Components/Button.h"
 #include "Components/CheckBox.h"
-#include "Components/ComboBoxString.h"
 #include "Components/TextBlock.h"
 #include "Engine/GameInstance.h"
 #include "EngineUtils.h"
@@ -29,10 +28,6 @@ void UHUICRSyncCalibrationMenu::NativeConstruct()
 	if (UCheckBox* Motion = Cast<UCheckBox>(GetWidgetFromName(TEXT("GameMotionParallaxCheckBox"))))
 	{
 		Motion->OnCheckStateChanged.AddUniqueDynamic(this, &ThisClass::SetGameParallax);
-	}
-	if (UComboBoxString* Preview = Cast<UComboBoxString>(GetWidgetFromName(TEXT("PCScreenPreview"))))
-	{
-		Preview->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::SelectPreviewScreen);
 	}
 	RefreshCalibrationControls();
 }
@@ -101,24 +96,6 @@ void UHUICRSyncCalibrationMenu::RefreshCalibrationControls()
 	{
 		Cancel->SetVisibility(Session->bIsLocalHMDCalibrating ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
-	if (UComboBoxString* Preview = Cast<UComboBoxString>(GetWidgetFromName(TEXT("PCScreenPreview"))))
-	{
-		Preview->SetVisibility(Session->bCanEditPCScreenLayout ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-		Preview->SetIsEnabled(!Session->bWaitingForCalibrationResult);
-		if (Preview->GetOptionCount() != Session->CalibrationScreenIds.Num())
-		{
-			Preview->ClearOptions();
-			for (int32 Id : Session->CalibrationScreenIds)
-			{
-				Preview->AddOption(FString::FromInt(Id));
-			}
-			Preview->SetSelectedOption(TEXT("0"));
-		}
-	}
-	if (UWidget* PreviewLabel = GetWidgetFromName(TEXT("PCScreenPreviewLabel")))
-	{
-		PreviewLabel->SetVisibility(Session->bCanEditPCScreenLayout ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
-	}
 	if (UWidget* Box = GetWidgetFromName(TEXT("GameMotionParallaxCheckBox")))
 	{
 		Box->SetVisibility(bManaged ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
@@ -172,14 +149,6 @@ void UHUICRSyncCalibrationMenu::SetGameParallax(bool bEnabled)
 	{
 		It->ChangeMotionParallaxState(bEnabled);
 		break;
-	}
-}
-
-void UHUICRSyncCalibrationMenu::SelectPreviewScreen(FString Screen, ESelectInfo::Type SelectionType)
-{
-	if (Session.IsValid() && SelectionType != ESelectInfo::Direct && Screen.IsNumeric())
-	{
-		Session->RequestCalibrationPreview(FCString::Atoi(*Screen));
 	}
 }
 
