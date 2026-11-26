@@ -290,6 +290,77 @@ bool FHUICRSyncSharedFieldsTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestEqual(TEXT("A stops preparing once B's takeover reaches A"), BallA->PrepareEventCount, APreparesAfterTakeover);
+	const int32 PCReceivesBeforeTakeover = Ball->ReceiveEventCount;
+	if (!TestTrue(TEXT("PC takes motion from B while both headsets are playing"),
+		Ball->SetSyncFieldSourceInternal(Motion, Follow, {})))
+	{
+		return false;
+	}
+	const FTransform PCPoses[] = {
+		FTransform(FRotator(5, 30, -10), FVector(48, -16, 21), FVector(1.25, 0.75, 2)),
+		FTransform(FRotator(-14, 85, 7), FVector(-73, 42, 8), FVector(0.8, 1.4, 0.6))
+	};
+	for (const FTransform& Pose : PCPoses)
+	{
+		Ball->PayloadAtPrepare = Sample(0, 99);
+		Ball->PayloadAtPrepare.GetMutable<FHUICRSyncScreenPayload>().Transform = Pose;
+		auto ReceivedMotionOnly = [&](const AHUICRSyncFieldTestActor* Receiver)
+		{
+			const auto* Payload = Receiver->LastEventPayload.GetPtr<FHUICRSyncScreenPayload>();
+			return Payload && Payload->Transform.Equals(Pose) && Payload->ScreenID == 2 &&
+				Receiver->LastEventFields.Num() == 1 && Receiver->LastEventFields.Contains(Motion);
+		};
+		if (!WaitFor(TEXT("Both live headsets receive the PC pose via their motion-only actor events"),
+			[&] { return ReceivedMotionOnly(BallA) && ReceivedMotionOnly(BallB); }))
+		{
+			return false;
+		}
+	}
+	TestEqual(TEXT("PC does not receive its own motion back from either headset"), Ball->ReceiveEventCount, PCReceivesBeforeTakeover);
+	if (!TestTrue(TEXT("B takes motion back from PC"), BallB->SetSyncFieldSourceInternal(Motion, Follow, {})) ||
+		!WaitFor(TEXT("B's motion reaches both the former PC writer and A"), [&]
+			{ return Ball->ReceiveEventCount > PCReceivesBeforeTakeover && Ball->EventReadState(34, 2) && BallA->EventReadState(34, 2); }))
+	{
+		return false;
+	}
+	auto AppliedOnAllThree = [&](FName Field, double X, int32 ColorIndex)
+	{
+		for (const AHUICRSyncFieldTestActor* Receiver : { Ball, BallA, BallB })
+		{
+			if (!Receiver->EventReadState(X, ColorIndex) || Receiver->AppliedColorIndex != ColorIndex ||
+				Receiver->LastEventFields.Num() != 1 || !Receiver->LastEventFields.Contains(Field))
+			{
+				return false;
+			}
+		}
+		return true;
+	};
+	if (!TestTrue(TEXT("PC specifies a color while B controls motion"),
+			Ball->SetSyncFieldSourceInternal(Color, Fixed, Sample(900, 5))) ||
+		!WaitFor(TEXT("PC and both headsets apply only the PC's specified color"), [&] { return AppliedOnAllThree(Color, 34, 5); }))
+	{
+		return false;
+	}
+	BallB->PayloadAtPrepare = Sample(35, 777);
+	if (!WaitFor(TEXT("B continues moving the ball without replacing the PC's color"),
+			[&] { return Ball->EventReadState(35, 5) && BallA->EventReadState(35, 5) && IsState(BallB, 35, 5); }) ||
+		!TestTrue(TEXT("PC replaces B's continuous motion with one specified transform"),
+			Ball->SetSyncFieldSourceInternal(Motion, Fixed, Sample(71, 888))) ||
+		!WaitFor(TEXT("All three apply the fixed motion and preserve the independent color"), [&] { return AppliedOnAllThree(Motion, 71, 5); }))
+	{
+		return false;
+	}
+	const int32 BPreparesAfterFixedMotion = BallB->PrepareEventCount;
+	BallB->PayloadAtPrepare = Sample(901, 999);
+	BallB->PrepareOutgoingPayloadInternal(BallB->PayloadAtPrepare);
+	B->SyncSubsystem->Tick(.01f);
+	for (auto* Session : Sessions) { Session->Tick(.01f); }
+	TestEqual(TEXT("Fixing motion stops the previous writer's prepare event"), BallB->PrepareEventCount, BPreparesAfterFixedMotion);
+	TestTrue(TEXT("The former writer's new local sample cannot overwrite the fixed pose"),
+		IsState(Ball, 71, 5) && IsState(BallA, 71, 5) && IsState(BallB, 71, 5));
+	BallB->PayloadAtPrepare = Sample(34, 7);
+	if (!TestTrue(TEXT("B can explicitly resume continuous motion after the PC's fixed pose"),
+		BallB->SetSyncFieldSourceInternal(Motion, Follow, {}))) { return false; }
 	BallB->SetSyncFieldSourceInternal(Color, Follow, {});
 	if (!WaitFor(TEXT("The same color field switches from fixed to continuous"), [&] { return IsState(BallA, 34, 7); }))
 	{
